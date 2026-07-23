@@ -55,18 +55,41 @@ class SSP_Changelog_Emails {
     const MAX_LINES      = 12;
 
     public static function init() {
-        // Only wire up if the core engine is present.
-        if ( ! class_exists( 'SSE_Support_Emails' ) ) {
+        // Only wire up if the core engine (with the type registry) is present.
+        if ( ! function_exists( 'sse_register_support_email_type' ) ) {
             return;
         }
-        add_filter( 'sse_should_send_support_email',          array( __CLASS__, 'should_send' ), 10, 2 );
-        add_filter( 'sse_support_email_content',              array( __CLASS__, 'content' ), 10, 2 );
-        add_filter( 'sse_support_email_should_send_to_user',  array( __CLASS__, 'should_send_to_user' ), 10, 2 );
-        add_action( 'sse_support_email_sent',                 array( __CLASS__, 'on_sent' ), 10, 1 );
+        add_action( 'sse_register_support_email_types', array( __CLASS__, 'register_type' ) );
 
         // Expose our product→slug map to the core admin "Changelog automation"
         // screen so it can show which products are mapped.
         add_filter( 'sse_changelog_product_map', array( __CLASS__, 'filter_product_map' ) );
+    }
+
+    /**
+     * Register the 'changelog' Support Email type. Its three callbacks are the same
+     * methods that used to hook the loose support-email filters; only the wiring
+     * changed (per-type dispatch instead of global filters). Admins pick this type
+     * when creating a Support Email, and the editor then shows our placeholders.
+     */
+    public static function register_type() {
+        sse_register_support_email_type( 'changelog', array(
+            'label'        => __( 'Changelog (product update)', 'ssp-changelog-emails' ),
+            'mode'         => 'per_product',
+            'stages'       => 1,
+            'placeholders' => array(
+                '{changelog}'     => __( 'Changelog entries since the last version we emailed about', 'ssp-changelog-emails' ),
+                '{changelog_url}' => __( 'Link to the full changelog page for the product', 'ssp-changelog-emails' ),
+                '{version}'       => __( 'The current version', 'ssp-changelog-emails' ),
+            ),
+            'footer'       => __( "You're receiving this because you own {product_name}.", 'ssp-changelog-emails' ),
+            'callbacks'    => array(
+                'should_send'         => array( __CLASS__, 'should_send' ),
+                'should_send_to_user' => array( __CLASS__, 'should_send_to_user' ),
+                'content'             => array( __CLASS__, 'content' ),
+                'on_sent'             => array( __CLASS__, 'on_sent' ),
+            ),
+        ) );
     }
 
     /* --------------------------------------------------------------------- */
