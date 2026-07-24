@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of the three support-email filters — read each plugin's readme.txt and email owners when a new version ships. Adapt the product→slug map and the readme location to your own setup.
- * Version:     1.1.0
+ * Version:     1.2.0
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later

@@ -36,6 +36,9 @@ These sit alongside the core engine's own tokens (`{first_name}`, `{product_name
 
 == Changelog ==
 
+= 1.2.0 =
+* Refactored onto the Super Speedy Emails Support Email type registry: registers a `changelog` type via `sse_register_support_email_type()` instead of the three loose support-email filters. Behaviour is unchanged - `{changelog}` / `{changelog_url}` / `{version}` substitution and per-owner sending work exactly as before - but the type is now selectable in the Support Email editor, which lists its placeholders. Requires Super Speedy Emails 1.11.0+ (the type registry).
+
 = 1.1.0 =
 * The content filter now fills a `{changelog}` placeholder inside the admin's body instead of replacing the whole body. The wording of the email stays under the admin's control in the Support Email editor; only `{changelog}` / `{changelog_url}` / `{version}` are substituted. Existing setups that relied on the body being fully generated should add `{changelog}` to their Support Email body.
 
