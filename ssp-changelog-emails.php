@@ -12,26 +12,23 @@
  * --------------
  * Super Speedy Emails ships a GENERIC support-email engine. It resolves the
  * audience, applies the suppression gate, deduplicates, queues and logs — but it
- * knows nothing about changelogs. It asks three filters to supply the policy:
+ * knows nothing about changelogs. A plugin registers a support-email TYPE with
+ * sse_register_support_email_type(), supplying the policy as callbacks; admins
+ * then create Support Emails of that type in wp-admin and pick its placeholders.
  *
- *   sse_should_send_support_email          (per product) — is there news to send?
- *   sse_support_email_content              (per product) — the body (subject is the
- *                                                          support email's GUI field)
- *   sse_support_email_should_send_to_user  (per owner)   — should THIS person get it?
+ * This plugin registers the 'changelog' type (mode per_product) with:
+ *   should_send          (per product) — is there news? (the version advanced)
+ *   content              (per product/recipient) — fills {changelog} etc. in the body
+ *   should_send_to_user  (per owner)   — should THIS person get it?
+ *   on_sent              — advance the "last emailed version" baseline
  *
- * Every filter receives ONE argument besides the running value: an
- * SSE_Support_Context object. In product mode it carries:
- *   $context->support_email_id   which support email / rule is running (0 = the
- *                                changelog/product path)
- *   $context->product_id         the single product this run is about
- *   $context->subscriber         the recipient (null in the per-product probe)
- *   $context->matching_product   this owner's purchase row for that product
- *   $context->all_products       everything the owner has bought
- *   (+ helpers: ->owns(), ->bought_within(), ->is_product_mode())
+ * Each callback receives an SSE_Support_Context. In product mode it carries
+ * ->product_id, ->subscriber, ->matching_product, ->all_products (+ ->owns(),
+ * ->bought_within(), ->is_product_mode()).
  *
- * This plugin implements those three filters for "read a readme.txt changelog".
  * Swap the readme reader for any source (security advisories, an API, a CPT) and
- * you have a different kind of support email with the same plumbing.
+ * register a different type. For a per-USER type — one email per person, with an
+ * escalating reminder sequence — see ssp-licensing's licence-digest.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
