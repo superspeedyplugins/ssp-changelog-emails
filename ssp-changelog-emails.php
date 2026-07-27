@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
- * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. Adapt the product→slug map and the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.2.1
+ * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
+ * Version:     1.3.0
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later
@@ -51,6 +51,9 @@ class SSP_Changelog_Emails {
 
     /** Cap the changelog lines per email so it stays readable. */
     const MAX_LINES      = 12;
+
+    /** Derived product→slug map, cached against a signature of its sources. */
+    const MAP_TRANSIENT  = 'ssp_changelog_product_map';
 
     public static function init() {
         // Only wire up if the core engine (with the type registry) is present.
@@ -114,29 +117,223 @@ class SSP_Changelog_Emails {
     /**
      * WooCommerce product_id => plugin slug, for the individual plugins (NOT
      * bundles or services — bundle owners receive each component plugin's email
-     * via the owner-cache bundle expansion). Each slug has a readme.txt +
-     * {slug}.json under the assets dir.
+     * via the owner-cache bundle expansion).
      *
-     * EDIT THIS for your own products, or override via the sse_changelog_product_map
-     * filter from elsewhere.
+     * DERIVED, never hand-maintained: launching a plugin must not require editing
+     * this file. A product is matched to a plugin two ways:
+     *
+     *   1. Its URL slug IS the plugin slug (/product/delayed-image-import/), and a
+     *      {slug}.json ships for it. Covers everything we sell, free ones included —
+     *      the free plugins never appear in license-config.json at all.
+     *   2. license-config.json's `plugin` rules, which name the slug and list its
+     *      purchasable variation IDs; the variation's PARENT is the product we want
+     *      (a simple product lists itself, so parent 0 → itself). This is what
+     *      survives a product page being renamed away from its plugin slug.
+     *
+     * Overridable via the ssp_changelog_product_map filter for a product that neither
+     * rule catches.
      */
     public static function product_map() {
-        $default = array(
-            6018    => 'scalability-pro',
-            24899   => 'super-speedy-filters',
-            10510   => 'super-speedy-search',
-            1689897 => 'super-speedy-imports',
-            6689    => 'external-images',
-            24853   => 'auto-infinite-scroll',
-            1687502 => 'super-speedy-sitemaps',
-            1692164 => 'super-speedy-chat',
-            1692165 => 'super-speedy-ajax-prices',
-        );
-        $clean = array();
-        foreach ( (array) $default as $pid => $slug ) {
-            $clean[ (int) $pid ] = sanitize_title( $slug );
+        $sig    = self::map_signature();
+        $cached = get_transient( self::MAP_TRANSIENT );
+
+        if ( is_array( $cached ) && isset( $cached['sig'], $cached['map'] ) && $cached['sig'] === $sig ) {
+            $map = (array) $cached['map'];
+        } else {
+            $map = self::derive_product_map();
+            // Signature is the licence config's mtime, so a retier remaps at once.
+            // A newly deployed plugin does NOT need this cache to expire: slug_for()
+            // stats its {slug}.json directly, so it resolves on the next run either way.
+            set_transient( self::MAP_TRANSIENT, array( 'sig' => $sig, 'map' => $map ), DAY_IN_SECONDS );
         }
-        return $clean;
+
+        return (array) apply_filters( 'ssp_changelog_product_map', $map );
+    }
+
+    /**
+     * Build the full map WITHOUT ever scanning the assets dir. On live that dir sits
+     * inside the uploads tree and holds a lot of files, and glob() there is linear in
+     * the file count (measured: ~0.4ms per 1,000 entries, ~86ms at 200,000) — a cost
+     * paid on every call, cache hit included, if the scan were part of the lookup.
+     *
+     * So the universe is the PRODUCTS, not the files: one indexed query for published
+     * products, then a single is_readable() stat per product to ask "does a plugin of
+     * that name ship?". Stat cost does not grow with the directory.
+     *
+     * Only slugs that actually ship are mapped: a retired plugin still carrying a
+     * licence rule (price-comparison-pro) has no readme to quote, and mapping it would
+     * let content() replace {changelog} with nothing — passing the engine's
+     * unfilled-placeholder guard with an empty email instead of being blocked by it.
+     *
+     * @return array product_id => slug
+     */
+    private static function derive_product_map() {
+        global $wpdb;
+
+        if ( ! is_dir( self::assets_dir() ) ) {
+            // Loud, not silent: an unreadable assets dir means EVERY product looks
+            // unmapped, and the whole changelog automation quietly stops.
+            error_log( 'ssp-changelog-emails: assets dir ' . self::assets_dir() . ' is not readable - nothing can be mapped.' );
+            return array();
+        }
+
+        $map  = array();
+        $rows = $wpdb->get_results(
+            "SELECT ID, post_name FROM {$wpdb->posts} WHERE post_type = 'product' AND post_status = 'publish'"
+        );
+
+        foreach ( (array) $rows as $row ) {
+            if ( self::ships( $row->post_name ) ) {
+                $map[ (int) $row->ID ] = sanitize_title( $row->post_name );
+            }
+        }
+
+        // Renamed products, whose URL no longer matches the plugin slug: the licence
+        // rule names the slug explicitly, and its variations point at the product.
+        $aliases = self::license_config_aliases();
+        foreach ( self::license_config_products() as $slug => $ids ) {
+            // Activations (and therefore rules) are keyed by the canonical slug for a
+            // renamed plugin, e.g. super-speedy-filters -> faster-woo-widgets.
+            $slug = isset( $aliases[ $slug ] ) ? $aliases[ $slug ] : $slug;
+            if ( in_array( $slug, $map, true ) || ! self::ships( $slug ) ) {
+                continue;
+            }
+            $product_id = self::product_id_from_variations( $ids );
+            if ( $product_id ) {
+                $map[ $product_id ] = $slug;
+            }
+        }
+
+        return $map;
+    }
+
+    /** Does a plugin of this slug ship? One stat — never a directory scan. */
+    private static function ships( $slug ) {
+        $slug = sanitize_title( (string) $slug );
+        return '' !== $slug && is_readable( self::assets_dir() . '/' . $slug . '.json' );
+    }
+
+    /**
+     * First published `product` behind a rule's product IDs. Those IDs are
+     * variations (the licence tiers), so take the parent; a simple product has no
+     * parent and stands for itself.
+     */
+    private static function product_id_from_variations( $ids ) {
+        foreach ( (array) $ids as $id ) {
+            $id = (int) $id;
+            if ( $id <= 0 ) {
+                continue;
+            }
+            $parent     = wp_get_post_parent_id( $id );
+            $product_id = $parent ? (int) $parent : $id;
+            if ( 'product' === get_post_type( $product_id ) && 'publish' === get_post_status( $product_id ) ) {
+                return $product_id;
+            }
+        }
+        return 0;
+    }
+
+    /** Cache key material: when the licence config last changed. */
+    private static function map_signature() {
+        $path = self::license_config_path();
+        return ( $path && is_readable( $path ) ) ? (string) filemtime( $path ) : '0';
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* license-config.json — the same file auth-server enforces licences from  */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * Full path to license-config.json. Live sets SSP_LICENSE_CONFIG_PATH in
+     * wp-config.php (the file lives outside the docroot, reachable via an ACL);
+     * the dev fallbacks keep auth-server as a sibling of the WordPress root.
+     * Same candidate list and same filter as ssp-licensing's wpi_license_config().
+     */
+    private static function license_config_path() {
+        static $resolved = false;
+        static $path     = '';
+
+        if ( $resolved ) {
+            return $path;
+        }
+        $resolved = true;
+
+        $candidates = array();
+        if ( defined( 'SSP_LICENSE_CONFIG_PATH' ) ) {
+            $candidates[] = SSP_LICENSE_CONFIG_PATH;
+        }
+        $candidates[] = dirname( dirname( ABSPATH ) ) . '/auth-server/license-config.json';
+        $candidates[] = dirname( ABSPATH ) . '/auth-server/license-config.json';
+
+        $candidates = apply_filters( 'ssp_license_config_paths', $candidates );
+
+        foreach ( $candidates as $candidate ) {
+            if ( $candidate && is_readable( $candidate ) ) {
+                $path = (string) $candidate;
+                break;
+            }
+        }
+
+        return $path;
+    }
+
+    private static function license_config() {
+        static $config = null;
+        static $loaded = false;
+
+        if ( $loaded ) {
+            return $config;
+        }
+        $loaded = true;
+
+        $path = self::license_config_path();
+        if ( $path ) {
+            $data = json_decode( (string) file_get_contents( $path ), true );
+            if ( is_array( $data ) ) {
+                $config = $data;
+            }
+        }
+
+        return $config;
+    }
+
+    /**
+     * slug => product/variation IDs, from the per-plugin rules ONLY. Bundle rules
+     * (group / universal / global_exclude) are deliberately skipped: a bundle is
+     * not a plugin, and its owners already receive each component plugin's email
+     * through the owner-cache bundle expansion.
+     *
+     * @return array slug => int[]
+     */
+    private static function license_config_products() {
+        $config = self::license_config();
+        $out    = array();
+
+        foreach ( (array) ( isset( $config['rules'] ) ? $config['rules'] : array() ) as $rule ) {
+            if ( ! is_array( $rule ) || 'plugin' !== ( isset( $rule['type'] ) ? $rule['type'] : '' ) ) {
+                continue;
+            }
+            if ( empty( $rule['plugin'] ) || empty( $rule['products'] ) || ! is_array( $rule['products'] ) ) {
+                continue;
+            }
+            $slug = sanitize_title( (string) $rule['plugin'] );
+            if ( '' === $slug ) {
+                continue;
+            }
+            $ids = array_map( 'intval', array_keys( $rule['products'] ) );
+            // Later rules win, matching auth-server's own resolution order.
+            $out[ $slug ] = isset( $out[ $slug ] ) ? array_merge( $out[ $slug ], $ids ) : $ids;
+        }
+
+        return $out;
+    }
+
+    /** slug => canonical slug, for plugins whose licences predate a rename. */
+    private static function license_config_aliases() {
+        $config = self::license_config();
+        return ( $config && ! empty( $config['plugin_aliases'] ) && is_array( $config['plugin_aliases'] ) )
+            ? $config['plugin_aliases']
+            : array();
     }
 
     /** Merge our map into the core admin's view of mapped products. */
@@ -144,9 +341,37 @@ class SSP_Changelog_Emails {
         return self::product_map() + (array) $map;
     }
 
+    /**
+     * The plugin slug this product sells, or '' when it sells none of ours.
+     *
+     * Deliberately does NOT start by building the full map. The overwhelmingly common
+     * case — a product whose URL slug is the plugin slug — costs one cached get_post()
+     * and one stat, and it answers correctly the moment a new plugin is deployed,
+     * with no cache to expire first. The full map is only consulted for the rest.
+     */
     private static function slug_for( $product_id ) {
+        $product_id = (int) $product_id;
+        if ( $product_id <= 0 ) {
+            return '';
+        }
+
+        // An explicit override must beat the URL-slug guess. Checking for a
+        // registered filter first keeps that precedence without paying for the
+        // full map on the sites (all of ours) that register none.
+        if ( has_filter( 'ssp_changelog_product_map' ) ) {
+            $map = self::product_map();
+            if ( isset( $map[ $product_id ] ) ) {
+                return $map[ $product_id ];
+            }
+        }
+
+        $post = get_post( $product_id );
+        if ( $post && 'product' === $post->post_type && self::ships( $post->post_name ) ) {
+            return sanitize_title( $post->post_name );
+        }
+
         $map = self::product_map();
-        return isset( $map[ (int) $product_id ] ) ? $map[ (int) $product_id ] : '';
+        return isset( $map[ $product_id ] ) ? $map[ $product_id ] : '';
     }
 
     private static function name_for( $product_id, $slug ) {

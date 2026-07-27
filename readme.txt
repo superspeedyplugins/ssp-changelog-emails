@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.2.1
+Stable tag: 1.3.0
 License: GPL-2.0-or-later
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
@@ -23,7 +23,7 @@ This plugin registers the `changelog` type (mode `per_product`) for the "read a 
 
 **To adapt it to your own products:**
 
-1. Edit the `product_map()` method — your WooCommerce `product_id => plugin-slug` pairs.
+1. Nothing, if your product URL slug matches your plugin slug (`/product/my-plugin/` for `my-plugin`) — the map derives itself from what ships. Otherwise either name the slug in an auth-server `license-config.json` `plugin` rule, or hook the `ssp_changelog_product_map` filter with your own `product_id => plugin-slug` pairs.
 2. Edit `LIVE_BASE` (or define `SSE_SUPPORT_ASSETS_DIR`, or hook `sse_support_assets_dir`) to point at where your plugins' `{slug}/readme.txt` and `{slug}.json` files live on disk.
 3. Edit `CHANGELOG_URL` to your public changelog base URL.
 
@@ -38,6 +38,12 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.3.0 (27th July 2026) =
+* The product -> plugin-slug map is now DERIVED, not hand-maintained. Launching a plugin no longer means editing this file. A product matches a plugin when its URL slug IS the plugin slug (`/product/delayed-image-import/`) and a `{slug}.json` ships for it, which covers everything we sell including the free plugins, since those never appear in `license-config.json` at all. Fixes Fullscreen Typeform and Delayed Image Import being blocked as unmapped.
+* A product whose URL has been renamed away from its plugin slug is matched instead from auth-server's `license-config.json`: the per-plugin rules name the slug and list its variation IDs, and the variation's parent is the product. Read from `SSP_LICENSE_CONFIG_PATH` (set in wp-config.php - the file lives outside the docroot), falling back to an `auth-server` folder beside the WordPress root for dev, and filterable with `ssp_license_config_paths` - the same candidate list ssp-licensing uses, so the path is defined in one place.
+* Bundle rules (`group` / `universal` / `global_exclude`) are deliberately not mapped: a bundle is not a plugin, and its owners already receive each component plugin's email through the owner-cache bundle expansion. Retired plugins that still carry a licence rule but no longer ship a readme are skipped too, so an empty changelog can never satisfy the engine's unfilled-placeholder guard.
+* The assets dir is never scanned. It sits inside the uploads tree on live and holds a lot of files, and a `glob()` there costs about 0.4ms per 1,000 entries (86ms at 200,000) - every call, cache hit included. Instead the lookup asks "does a plugin of this product's name ship?" with a single `is_readable()`, which does not get slower as the directory grows: 0.04ms per lookup measured. The full map (one indexed query over published products) is only built for the rename case, and is cached for a day against the licence config's modification time. New `ssp_changelog_product_map` filter for a product neither rule catches.
 
 = 1.2.1 (27th July 2026) =
 * The "last emailed version" baseline now advances in the new `on_complete` callback, once a product's whole fan-out has finished, instead of per recipient in `on_sent`. Previously the baseline moved on the first recipient of a run, so a run that died partway through a large audience (a PHP timeout while queueing, say) left everyone it had not reached without that version's changelog until the next release. On a Super Speedy Emails older than 1.11.2, which does not dispatch `on_complete`, the baseline falls back to advancing in `on_sent` as before, so the two plugins can be deployed in either order.
