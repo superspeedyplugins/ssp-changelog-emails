@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.4.0
+Stable tag: 1.5.0
 License: GPL-2.0-or-later
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
@@ -39,6 +39,15 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.5.0 (27th July 2026) =
+* `{changelog}` now shows TODAY'S release only, and only its first 3 items. The rest is a number and a link: "And 2 more items in this release and 19 more items you do not already have. See the full changelog." Both halves are counted honestly, either half is dropped when its count is zero, and the whole line disappears when the email already shows everything.
+* Each release now reads as bold date, then "Version 3.2.0" as the link to that release's own anchor on the changelog page, with the items as bullets underneath. No heading tag - it sits inside the admin's own body copy, so it should read as part of it rather than as a document section inheriting a template's heading styles.
+* `{changes_count}` is now counted from the version the READER actually has installed, via the new `ssp_licensing_installed_version()` in ssp-licensing (requires ssp-licensing 1.22+). A customer with several sites on several versions is counted from their LATEST, so a "changes you do not have" count can never claim they are missing something they already run.
+* We will often not know their version - it relies on them having entered their licence key and their sites having checked in since auth-server started recording versions. Every one of those readers still needs a true sentence, so the count falls back to our own "last emailed about" baseline whenever the version is unknown, the subscriber has no linked WordPress user, or they are already on the current version.
+* New `{changes_summary}` placeholder carrying the count AS A PHRASE, which is what makes the fallback invisible to the reader: "25 changes you do not have yet" when we know their version, "25 changes since we last sent this email" when we do not. Intended for the subject line.
+* Placeholders now work in the SUBJECT as well as the body (requires Super Speedy Emails 1.11.3+, which passes the subject through the type). `{changelog}` is deliberately not substituted there - a list of releases has no business in a subject line, so an admin who puts it there gets it blocked rather than sent mangled.
+* Never advertises zero. If the baseline has already caught up with the current version - a preview, or a second Support Email for the same product having advanced it - the count falls back to "5 changes in this release" rather than rendering "0 changes since we last sent this email" into a subject line.
 
 = 1.4.0 (27th July 2026) =
 * Fixed: the version headers and their dates were being thrown away when `{changelog}` was filled, leaving a flat undated list of bullets. `{changelog}` now keeps each release as its own dated heading. This is not cosmetic - a run of dated releases is the evidence that the plugin is actively developed, and flattening it hid the one thing the email was there to demonstrate.

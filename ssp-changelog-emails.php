@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.4.0
+ * Version:     1.5.0
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later
@@ -49,15 +49,12 @@ class SSP_Changelog_Emails {
     /** Public "read the full changelog" base URL. */
     const CHANGELOG_URL  = 'https://www.superspeedyplugins.com/support/changelogs/';
 
-    /** Cap the changelog lines per email so it stays readable. */
-    const MAX_LINES      = 12;
-
     /**
-     * How many of the LATEST releases the email shows in full. The rest sit behind
-     * the "and N more" link, which is the whole point: the reader clicks through to
-     * the changelog page rather than reading the lot in their inbox.
+     * How many items of today's release the email shows. The rest sit behind the
+     * "and N more" link, which is the whole point: the reader clicks through to the
+     * changelog page rather than reading the lot in their inbox.
      */
-    const MAX_RELEASES   = 3;
+    const MAX_ITEMS      = 3;
 
     /** Derived product→slug map, cached against a signature of its sources. */
     const MAP_TRANSIENT  = 'ssp_changelog_product_map';
@@ -94,8 +91,9 @@ class SSP_Changelog_Emails {
             'mode'         => 'per_product',
             'stages'       => 1,
             'placeholders' => array(
-                '{changelog}'     => __( 'The latest releases since the version we last emailed about, dated, each linking to its own entry on the changelog page', 'ssp-changelog-emails' ),
-                '{changes_count}' => __( 'How many changes in total since the version we last emailed about, e.g. 25', 'ssp-changelog-emails' ),
+                '{changelog}'       => __( "Today's release: the date, a link to that version on the changelog page, the first few items, and a count of what is left", 'ssp-changelog-emails' ),
+                '{changes_count}'   => __( 'How many changes the reader has not got - counted from their own installed version when we know it, e.g. 25', 'ssp-changelog-emails' ),
+                '{changes_summary}' => __( 'The same count as a phrase that reads correctly whether or not we know their version, e.g. "25 changes you do not have yet". Use this in the subject', 'ssp-changelog-emails' ),
                 '{changelog_url}' => __( 'Link to the full changelog page for the product', 'ssp-changelog-emails' ),
                 '{version}'       => __( 'The current version', 'ssp-changelog-emails' ),
             ),
@@ -460,73 +458,156 @@ class SSP_Changelog_Emails {
             return $content; // not one of ours — leave the body (and its tokens) untouched
         }
 
-        $current  = self::current_version( $slug );
-        $last     = get_option( self::VERSION_OPTION . $slug, '' );
-        $releases = ( '' !== $current ) ? self::releases_since( $slug, $last ) : array();
-
+        $current       = self::current_version( $slug );
         $changelog_url = self::CHANGELOG_URL . rawurlencode( $slug ) . '/';
         $body          = isset( $content['body'] ) ? (string) $content['body'] : '';
+        $subject       = isset( $content['subject'] ) ? (string) $content['subject'] : '';
 
-        // Total changes across every release since the version we last emailed about
-        // — the number the copy leads on ("25 updates"). Counted over ALL releases,
-        // not just the ones shown, because that is what the reader is being offered.
+        // What this reader is missing, counted from THEIR version when the licence
+        // telemetry knows it and from our own baseline when it does not. See
+        // counting_baseline() for why the fallback matters more than the personalisation.
+        $baseline = self::counting_baseline( $context, $slug, $current );
+        $missing  = ( '' !== $current ) ? self::releases_since( $slug, $baseline['version'] ) : array();
+
         $total = 0;
-        foreach ( $releases as $release ) {
+        foreach ( $missing as $release ) {
             $total += count( $release['items'] );
         }
 
-        // Show the LATEST few releases and leave the rest behind the link. Two caps
-        // apply: the release count, and MAX_LINES bullets in total so one enormous
-        // release cannot fill the inbox. Whatever the caps hold back is counted and
-        // offered as a link, never silently dropped.
-        $shown         = array();
-        $shown_changes = 0;
-        $budget        = self::MAX_LINES;
-        foreach ( array_slice( $releases, 0, self::MAX_RELEASES ) as $release ) {
-            if ( $budget < 1 ) {
-                break;
-            }
-            if ( count( $release['items'] ) > $budget ) {
-                $release['items'] = array_slice( $release['items'], 0, $budget );
-            }
-            $budget        -= count( $release['items'] );
-            $shown_changes += count( $release['items'] );
-            $shown[]        = $release;
-        }
+        // The email shows TODAY'S release only, and only the first few items of it.
+        // Everything else is a number and a link: the click is the point.
+        $latest = ( '' !== $current ) ? self::releases_since( $slug, '' ) : array();
+        $latest = $latest ? $latest[0] : null;
 
-        $hidden_changes  = $total - $shown_changes;
-        $hidden_releases = count( $releases ) - count( $shown );
+        $shown_items   = $latest ? array_slice( $latest['items'], 0, self::MAX_ITEMS ) : array();
+        $rest_of_this  = $latest ? count( $latest['items'] ) - count( $shown_items ) : 0;
+        // Older releases they have not got. Subtracting today's release avoids
+        // counting the same change in both halves of the sentence.
+        $rest_missing  = $total - ( $latest ? count( $latest['items'] ) : 0 );
+        if ( $rest_missing < 0 ) {
+            $rest_missing = 0;
+        }
 
         $as_html = class_exists( 'SSE_Sender' ) && SSE_Sender::looks_like_html( $body );
         $changes = $as_html
-            ? self::render_releases_html( $shown, $hidden_changes, $hidden_releases, $changelog_url )
-            : self::render_releases_text( $shown, $hidden_changes, $hidden_releases, $changelog_url );
+            ? self::render_release_html( $latest, $shown_items, $rest_of_this, $rest_missing, $changelog_url )
+            : self::render_release_text( $latest, $shown_items, $rest_of_this, $rest_missing, $changelog_url );
+
+        // Never advertise zero. The baseline can already sit at the current version —
+        // a preview, or a second Support Email for the same product having advanced it
+        // — and "0 changes since we last sent this email" is not a subject line. Today's
+        // release is always something to announce, so fall back to counting that.
+        if ( $total < 1 && $latest ) {
+            $total = count( $latest['items'] );
+            $summary = sprintf(
+                /* translators: %d: number of changes in the release just published */
+                _n( '%d change in this release', '%d changes in this release', $total, 'ssp-changelog-emails' ),
+                $total
+            );
+        } else {
+            // The subject phrase has to read correctly in BOTH cases, so it carries its
+            // own wording rather than leaving the admin to write a sentence that is only
+            // true for the customers we happen to have telemetry for.
+            $summary = sprintf(
+                $baseline['known']
+                    /* translators: %d: number of changes the customer does not have */
+                    ? _n( '%d change you do not have yet', '%d changes you do not have yet', $total, 'ssp-changelog-emails' )
+                    /* translators: %d: number of changes since the last email */
+                    : _n( '%d change since we last sent this email', '%d changes since we last sent this email', $total, 'ssp-changelog-emails' ),
+                $total
+            );
+        }
 
         // Replace the changelog-specific placeholders IN the admin's body — the
         // wording stays under the admin's control in the Support Email editor.
         // {first_name}/{product_name}/{unsubscribe_url}/etc. are NOT touched here;
         // the core engine fills those afterwards. We always replace our own tokens
         // (even when there are no entries) so a literal {changelog} never ships.
-        $body = str_replace(
-            array(
-                '{changelog}', '{{changelog}}',
-                '{changelog_url}', '{{changelog_url}}',
-                '{version}', '{{version}}',
-                '{changes_count}', '{{changes_count}}',
-            ),
-            array(
-                $changes, $changes,
-                $changelog_url, $changelog_url,
-                $current, $current,
-                (string) $total, (string) $total,
-            ),
-            $body
+        $find    = array(
+            '{changelog}', '{{changelog}}',
+            '{changelog_url}', '{{changelog_url}}',
+            '{version}', '{{version}}',
+            '{changes_count}', '{{changes_count}}',
+            '{changes_summary}', '{{changes_summary}}',
+        );
+        $replace = array(
+            $changes, $changes,
+            $changelog_url, $changelog_url,
+            $current, $current,
+            (string) $total, (string) $total,
+            $summary, $summary,
         );
 
-        return array(
-            'body' => $body,
+        $out = array(
+            'body' => str_replace( $find, $replace, $body ),
             'name' => self::name_for( $product_id, $slug ),
         );
+
+        // The subject gets the same treatment, minus {changelog} itself — a list of
+        // releases has no business in a subject line, and leaving it out means an
+        // admin who drops it there sees it blocked rather than sent mangled.
+        if ( '' !== $subject ) {
+            $out['subject'] = str_replace(
+                array_slice( $find, 2 ),
+                array_slice( $replace, 2 ),
+                $subject
+            );
+        }
+
+        return $out;
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* Which version do we count from?                                        */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * The version to count changes from for THIS reader, and whether it is theirs.
+     *
+     * Personalisation here is a bonus, never a requirement. The version telemetry
+     * only exists for customers who entered their licence key and whose sites have
+     * checked in since auth-server started recording it, so a large slice of any
+     * list has no version at all. Every one of those still needs a true sentence,
+     * which is why the fallback (our own "last emailed about" baseline) is the
+     * default and the personalised path has to earn its way in:
+     *
+     *   - No subscriber (the product-level probe used by preview and planning),
+     *     no linked WP user, or no telemetry → baseline, known = false.
+     *   - Several sites on several versions → their LATEST, so "changes you do not
+     *     have" counts only what is missing from every site they run. Understating
+     *     is recoverable; telling someone they are missing something they already
+     *     have is not.
+     *   - Already on the current version → baseline, known = false. They are being
+     *     told about a release they have; "0 changes you do not have" is not a
+     *     sentence worth sending.
+     *
+     * @return array{version:string, known:bool}
+     */
+    private static function counting_baseline( $context, $slug, $current ) {
+        $fallback = array(
+            'version' => (string) get_option( self::VERSION_OPTION . $slug, '' ),
+            'known'   => false,
+        );
+
+        if ( ! function_exists( 'ssp_licensing_installed_version' ) ) {
+            return $fallback;
+        }
+
+        $subscriber = isset( $context->subscriber ) ? $context->subscriber : null;
+        $user_id    = ( $subscriber && ! empty( $subscriber->wp_user_id ) ) ? (int) $subscriber->wp_user_id : 0;
+        if ( $user_id < 1 ) {
+            return $fallback;
+        }
+
+        $theirs = ssp_licensing_installed_version( $user_id, $slug, 'latest' );
+        if ( '' === $theirs ) {
+            return $fallback;
+        }
+        if ( '' !== $current && version_compare( $theirs, $current, '>=' ) ) {
+            return $fallback;
+        }
+
+        return array( 'version' => $theirs, 'known' => true );
     }
 
     /* --------------------------------------------------------------------- */
@@ -534,66 +615,65 @@ class SSP_Changelog_Emails {
     /* --------------------------------------------------------------------- */
 
     /**
-     * Rich-HTML body: each release is a dated heading that DEEP-LINKS to itself on
-     * the public changelog page (ssp-changelogs emits the matching anchors), so every
-     * release in the email is its own click target rather than one link at the end.
+     * Rich-HTML body: bold date, then "Version 2.79.0" as the link, deep-linked to
+     * that release's own anchor on the changelog page (ssp-changelogs emits them),
+     * then the items as bullets. No heading tag — this sits inside the admin's own
+     * body copy, so it has to read as part of the sentence around it, not as a
+     * document section that inherits some template's h2 styling.
      */
-    private static function render_releases_html( $shown, $hidden_changes, $hidden_releases, $changelog_url ) {
-        if ( ! $shown ) {
+    private static function render_release_html( $release, $items, $rest_of_this, $rest_missing, $changelog_url ) {
+        if ( ! $release ) {
             return '';
         }
 
-        $out = '';
-        foreach ( $shown as $release ) {
-            $href  = $changelog_url . '#' . rawurlencode( $release['anchor'] );
-            $out  .= '<h3 style="margin:24px 0 6px;font-size:16px;">';
-            $out  .= '<a href="' . esc_url( $href ) . '">' . esc_html( $release['version'] ) . '</a>';
-            if ( '' !== $release['date'] ) {
-                $out .= ' <span style="font-weight:normal;opacity:0.7;">' . esc_html( $release['date'] ) . '</span>';
-            }
-            $out .= '</h3>';
+        $href = $changelog_url . '#' . rawurlencode( $release['anchor'] );
+        $out  = '<p style="margin:16px 0 6px;">';
+        if ( '' !== $release['date'] ) {
+            $out .= '<strong>' . esc_html( $release['date'] ) . '</strong> ';
+        }
+        $out .= '<a href="' . esc_url( $href ) . '">'
+            . esc_html( sprintf( __( 'Version %s', 'ssp-changelog-emails' ), $release['version'] ) )
+            . '</a></p>';
 
-            if ( $release['items'] ) {
-                $out .= '<ul style="margin:0 0 8px;padding-left:20px;">';
-                foreach ( $release['items'] as $item ) {
-                    $out .= '<li>' . esc_html( $item ) . '</li>';
-                }
-                $out .= '</ul>';
+        if ( $items ) {
+            $out .= '<ul style="margin:0 0 8px;padding-left:20px;">';
+            foreach ( $items as $item ) {
+                $out .= '<li>' . esc_html( $item ) . '</li>';
             }
+            $out .= '</ul>';
         }
 
-        $tail = self::tail_phrase( $hidden_changes, $hidden_releases );
+        $tail = self::tail_phrase( $rest_of_this, $rest_missing );
         if ( '' !== $tail ) {
-            $out .= '<p style="margin:16px 0;"><a href="' . esc_url( $changelog_url ) . '">'
-                . esc_html( $tail ) . '</a></p>';
+            $out .= '<p style="margin:12px 0;">' . esc_html( $tail ) . ' '
+                . '<a href="' . esc_url( $changelog_url ) . '">'
+                . esc_html__( 'See the full changelog', 'ssp-changelog-emails' ) . '</a>.</p>';
         }
 
         return $out;
     }
 
-    /** Plain-text body: same shape, same deep links, written out. */
-    private static function render_releases_text( $shown, $hidden_changes, $hidden_releases, $changelog_url ) {
-        if ( ! $shown ) {
+    /** Plain-text body: same shape, same deep link, written out. */
+    private static function render_release_text( $release, $items, $rest_of_this, $rest_missing, $changelog_url ) {
+        if ( ! $release ) {
             return '';
         }
 
-        $lines = array();
-        foreach ( $shown as $release ) {
-            $heading = $release['version'];
-            if ( '' !== $release['date'] ) {
-                $heading .= ' (' . $release['date'] . ')';
-            }
-            $lines[] = $heading;
-            $lines[] = $changelog_url . '#' . rawurlencode( $release['anchor'] );
-            foreach ( $release['items'] as $item ) {
-                $lines[] = '- ' . $item;
-            }
-            $lines[] = '';
+        $heading = '';
+        if ( '' !== $release['date'] ) {
+            $heading .= $release['date'] . ' ';
+        }
+        $heading .= sprintf( __( 'Version %s', 'ssp-changelog-emails' ), $release['version'] );
+
+        $lines   = array( $heading, $changelog_url . '#' . rawurlencode( $release['anchor'] ), '' );
+        foreach ( $items as $item ) {
+            $lines[] = '- ' . $item;
         }
 
-        $tail = self::tail_phrase( $hidden_changes, $hidden_releases );
+        $tail = self::tail_phrase( $rest_of_this, $rest_missing );
         if ( '' !== $tail ) {
-            $lines[] = $tail . ':';
+            $lines[] = '';
+            $lines[] = $tail . ' ' . __( 'See the full changelog:', 'ssp-changelog-emails' );
             $lines[] = $changelog_url;
         }
 
@@ -601,40 +681,47 @@ class SSP_Changelog_Emails {
     }
 
     /**
-     * The line that carries the click: what is being held back, counted honestly.
-     * Empty when the email already shows everything — inventing a tease when there
-     * is nothing behind the link is the one thing that would make this dishonest.
+     * The line that carries the click, in two honest halves: what is left in today's
+     * release, and what is waiting in the releases before it. Either half is dropped
+     * when its count is zero, and the whole line disappears when the email already
+     * shows everything — inventing a tease with nothing behind the link is the one
+     * thing that would make this dishonest.
      */
-    private static function tail_phrase( $hidden_changes, $hidden_releases ) {
-        if ( $hidden_changes < 1 ) {
-            return '';
-        }
+    private static function tail_phrase( $rest_of_this, $rest_missing ) {
+        $parts = array();
 
-        // The bullet cap can hold changes back without holding a whole release back.
-        if ( $hidden_releases < 1 ) {
-            return sprintf(
-                /* translators: %d: number of changes not shown */
+        if ( $rest_of_this > 0 ) {
+            $parts[] = sprintf(
+                /* translators: %d: further items in the release just published */
                 _n(
-                    'And %d more change in this release - see the full changelog',
-                    'And %d more changes in this release - see the full changelog',
-                    $hidden_changes,
+                    '%d more item in this release',
+                    '%d more items in this release',
+                    $rest_of_this,
                     'ssp-changelog-emails'
                 ),
-                $hidden_changes
+                $rest_of_this
             );
         }
 
-        return sprintf(
-            /* translators: 1: number of changes, 2: number of releases */
-            _n(
-                'And %1$d more change in %2$d earlier release - see the full changelog',
-                'And %1$d more changes across %2$d earlier releases - see the full changelog',
-                $hidden_changes,
-                'ssp-changelog-emails'
-            ),
-            $hidden_changes,
-            $hidden_releases
-        );
+        if ( $rest_missing > 0 ) {
+            $parts[] = sprintf(
+                /* translators: %d: items from earlier releases the reader has not got */
+                _n(
+                    '%d more item you do not already have',
+                    '%d more items you do not already have',
+                    $rest_missing,
+                    'ssp-changelog-emails'
+                ),
+                $rest_missing
+            );
+        }
+
+        if ( ! $parts ) {
+            return '';
+        }
+
+        /* translators: %s: "3 more items in this release and 19 more items you do not already have" */
+        return sprintf( __( 'And %s.', 'ssp-changelog-emails' ), implode( __( ' and ', 'ssp-changelog-emails' ), $parts ) );
     }
 
     /* --------------------------------------------------------------------- */
