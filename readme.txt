@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 License: GPL-2.0-or-later
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
@@ -31,13 +31,21 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 
 **Placeholders this plugin fills in the body:**
 
-* `{changelog}` — the bulleted list of changelog entries since the version you last emailed about (capped, with a "see the full changelog" line if it overflows). Always replaced, even when there are no new entries, so a literal `{changelog}` never ships.
+* `{changelog}` — the latest releases since the version you last emailed about, each as a dated heading that deep-links to its own entry on the changelog page, with the rest behind an "and N more changes" link. HTML when your body is HTML, plain text otherwise. Always replaced, even when there are no new entries, so a literal `{changelog}` never ships.
+* `{changes_count}` — how many changes in total since the version you last emailed about, e.g. `25`. For an opening line such as "{changes_count} updates to {product_name} are ready for you".
 * `{changelog_url}` — the public changelog URL for this product.
 * `{version}` — the current version string.
 
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.4.0 (27th July 2026) =
+* Fixed: the version headers and their dates were being thrown away when `{changelog}` was filled, leaving a flat undated list of bullets. `{changelog}` now keeps each release as its own dated heading. This is not cosmetic - a run of dated releases is the evidence that the plugin is actively developed, and flattening it hid the one thing the email was there to demonstrate.
+* Each release heading now deep-links to its own entry on the changelog page (ssp-changelogs already emits matching anchors such as `#v2-79-0`), so every release in the email is its own click target instead of there being a single link at the end.
+* `{changelog}` now shows the latest 3 releases and puts the rest behind an honest "And 19 more changes across 5 earlier releases - see the full changelog" link. A second cap keeps the total to 12 bullets so one enormous release cannot fill the inbox. Nothing is silently truncated: whatever the caps hold back is counted in that line, and the line is omitted entirely when the email already shows everything.
+* New `{changes_count}` placeholder - the total number of changes since the version we last emailed about, for a subject or opening line such as "25 updates to {product_name}". Counted across every release, including the ones behind the link.
+* `{changelog}` is rendered as HTML when the Support Email body is HTML (headings, lists and real links) and as plain text otherwise, so it suits both body styles.
 
 = 1.3.0 (27th July 2026) =
 * The product -> plugin-slug map is now DERIVED, not hand-maintained. Launching a plugin no longer means editing this file. A product matches a plugin when its URL slug IS the plugin slug (`/product/delayed-image-import/`) and a `{slug}.json` ships for it, which covers everything we sell including the free plugins, since those never appear in `license-config.json` at all. Fixes Fullscreen Typeform and Delayed Image Import being blocked as unmapped.

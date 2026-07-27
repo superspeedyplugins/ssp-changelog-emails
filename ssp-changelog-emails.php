@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.3.0
+ * Version:     1.4.0
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later
@@ -52,6 +52,13 @@ class SSP_Changelog_Emails {
     /** Cap the changelog lines per email so it stays readable. */
     const MAX_LINES      = 12;
 
+    /**
+     * How many of the LATEST releases the email shows in full. The rest sit behind
+     * the "and N more" link, which is the whole point: the reader clicks through to
+     * the changelog page rather than reading the lot in their inbox.
+     */
+    const MAX_RELEASES   = 3;
+
     /** Derived product→slug map, cached against a signature of its sources. */
     const MAP_TRANSIENT  = 'ssp_changelog_product_map';
 
@@ -87,7 +94,8 @@ class SSP_Changelog_Emails {
             'mode'         => 'per_product',
             'stages'       => 1,
             'placeholders' => array(
-                '{changelog}'     => __( 'Changelog entries since the last version we emailed about', 'ssp-changelog-emails' ),
+                '{changelog}'     => __( 'The latest releases since the version we last emailed about, dated, each linking to its own entry on the changelog page', 'ssp-changelog-emails' ),
+                '{changes_count}' => __( 'How many changes in total since the version we last emailed about, e.g. 25', 'ssp-changelog-emails' ),
                 '{changelog_url}' => __( 'Link to the full changelog page for the product', 'ssp-changelog-emails' ),
                 '{version}'       => __( 'The current version', 'ssp-changelog-emails' ),
             ),
@@ -452,41 +460,180 @@ class SSP_Changelog_Emails {
             return $content; // not one of ours — leave the body (and its tokens) untouched
         }
 
-        $current = self::current_version( $slug );
-        $last    = get_option( self::VERSION_OPTION . $slug, '' );
-        $entries = ( '' !== $current ) ? self::changelog_since( $slug, $last ) : array();
+        $current  = self::current_version( $slug );
+        $last     = get_option( self::VERSION_OPTION . $slug, '' );
+        $releases = ( '' !== $current ) ? self::releases_since( $slug, $last ) : array();
 
-        // Cap + format the changelog bullets.
-        $shown = 0;
-        $lines = array();
-        foreach ( $entries as $entry ) {
-            $lines[] = '- ' . $entry;
-            if ( ++$shown >= self::MAX_LINES ) {
+        $changelog_url = self::CHANGELOG_URL . rawurlencode( $slug ) . '/';
+        $body          = isset( $content['body'] ) ? (string) $content['body'] : '';
+
+        // Total changes across every release since the version we last emailed about
+        // — the number the copy leads on ("25 updates"). Counted over ALL releases,
+        // not just the ones shown, because that is what the reader is being offered.
+        $total = 0;
+        foreach ( $releases as $release ) {
+            $total += count( $release['items'] );
+        }
+
+        // Show the LATEST few releases and leave the rest behind the link. Two caps
+        // apply: the release count, and MAX_LINES bullets in total so one enormous
+        // release cannot fill the inbox. Whatever the caps hold back is counted and
+        // offered as a link, never silently dropped.
+        $shown         = array();
+        $shown_changes = 0;
+        $budget        = self::MAX_LINES;
+        foreach ( array_slice( $releases, 0, self::MAX_RELEASES ) as $release ) {
+            if ( $budget < 1 ) {
                 break;
             }
+            if ( count( $release['items'] ) > $budget ) {
+                $release['items'] = array_slice( $release['items'], 0, $budget );
+            }
+            $budget        -= count( $release['items'] );
+            $shown_changes += count( $release['items'] );
+            $shown[]        = $release;
         }
-        if ( count( $entries ) > $shown ) {
-            $lines[] = '';
-            $lines[] = '...and more — see the full changelog below.';
-        }
-        $changes       = implode( "\n", $lines );
-        $changelog_url = self::CHANGELOG_URL . rawurlencode( $slug ) . '/';
+
+        $hidden_changes  = $total - $shown_changes;
+        $hidden_releases = count( $releases ) - count( $shown );
+
+        $as_html = class_exists( 'SSE_Sender' ) && SSE_Sender::looks_like_html( $body );
+        $changes = $as_html
+            ? self::render_releases_html( $shown, $hidden_changes, $hidden_releases, $changelog_url )
+            : self::render_releases_text( $shown, $hidden_changes, $hidden_releases, $changelog_url );
 
         // Replace the changelog-specific placeholders IN the admin's body — the
         // wording stays under the admin's control in the Support Email editor.
         // {first_name}/{product_name}/{unsubscribe_url}/etc. are NOT touched here;
         // the core engine fills those afterwards. We always replace our own tokens
         // (even when there are no entries) so a literal {changelog} never ships.
-        $body = isset( $content['body'] ) ? (string) $content['body'] : '';
         $body = str_replace(
-            array( '{changelog}', '{{changelog}}', '{changelog_url}', '{{changelog_url}}', '{version}', '{{version}}' ),
-            array( $changes,      $changes,        $changelog_url,     $changelog_url,       $current,    $current ),
+            array(
+                '{changelog}', '{{changelog}}',
+                '{changelog_url}', '{{changelog_url}}',
+                '{version}', '{{version}}',
+                '{changes_count}', '{{changes_count}}',
+            ),
+            array(
+                $changes, $changes,
+                $changelog_url, $changelog_url,
+                $current, $current,
+                (string) $total, (string) $total,
+            ),
             $body
         );
 
         return array(
             'body' => $body,
             'name' => self::name_for( $product_id, $slug ),
+        );
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* Rendering the releases                                                 */
+    /* --------------------------------------------------------------------- */
+
+    /**
+     * Rich-HTML body: each release is a dated heading that DEEP-LINKS to itself on
+     * the public changelog page (ssp-changelogs emits the matching anchors), so every
+     * release in the email is its own click target rather than one link at the end.
+     */
+    private static function render_releases_html( $shown, $hidden_changes, $hidden_releases, $changelog_url ) {
+        if ( ! $shown ) {
+            return '';
+        }
+
+        $out = '';
+        foreach ( $shown as $release ) {
+            $href  = $changelog_url . '#' . rawurlencode( $release['anchor'] );
+            $out  .= '<h3 style="margin:24px 0 6px;font-size:16px;">';
+            $out  .= '<a href="' . esc_url( $href ) . '">' . esc_html( $release['version'] ) . '</a>';
+            if ( '' !== $release['date'] ) {
+                $out .= ' <span style="font-weight:normal;opacity:0.7;">' . esc_html( $release['date'] ) . '</span>';
+            }
+            $out .= '</h3>';
+
+            if ( $release['items'] ) {
+                $out .= '<ul style="margin:0 0 8px;padding-left:20px;">';
+                foreach ( $release['items'] as $item ) {
+                    $out .= '<li>' . esc_html( $item ) . '</li>';
+                }
+                $out .= '</ul>';
+            }
+        }
+
+        $tail = self::tail_phrase( $hidden_changes, $hidden_releases );
+        if ( '' !== $tail ) {
+            $out .= '<p style="margin:16px 0;"><a href="' . esc_url( $changelog_url ) . '">'
+                . esc_html( $tail ) . '</a></p>';
+        }
+
+        return $out;
+    }
+
+    /** Plain-text body: same shape, same deep links, written out. */
+    private static function render_releases_text( $shown, $hidden_changes, $hidden_releases, $changelog_url ) {
+        if ( ! $shown ) {
+            return '';
+        }
+
+        $lines = array();
+        foreach ( $shown as $release ) {
+            $heading = $release['version'];
+            if ( '' !== $release['date'] ) {
+                $heading .= ' (' . $release['date'] . ')';
+            }
+            $lines[] = $heading;
+            $lines[] = $changelog_url . '#' . rawurlencode( $release['anchor'] );
+            foreach ( $release['items'] as $item ) {
+                $lines[] = '- ' . $item;
+            }
+            $lines[] = '';
+        }
+
+        $tail = self::tail_phrase( $hidden_changes, $hidden_releases );
+        if ( '' !== $tail ) {
+            $lines[] = $tail . ':';
+            $lines[] = $changelog_url;
+        }
+
+        return rtrim( implode( "\n", $lines ) );
+    }
+
+    /**
+     * The line that carries the click: what is being held back, counted honestly.
+     * Empty when the email already shows everything — inventing a tease when there
+     * is nothing behind the link is the one thing that would make this dishonest.
+     */
+    private static function tail_phrase( $hidden_changes, $hidden_releases ) {
+        if ( $hidden_changes < 1 ) {
+            return '';
+        }
+
+        // The bullet cap can hold changes back without holding a whole release back.
+        if ( $hidden_releases < 1 ) {
+            return sprintf(
+                /* translators: %d: number of changes not shown */
+                _n(
+                    'And %d more change in this release - see the full changelog',
+                    'And %d more changes in this release - see the full changelog',
+                    $hidden_changes,
+                    'ssp-changelog-emails'
+                ),
+                $hidden_changes
+            );
+        }
+
+        return sprintf(
+            /* translators: 1: number of changes, 2: number of releases */
+            _n(
+                'And %1$d more change in %2$d earlier release - see the full changelog',
+                'And %1$d more changes across %2$d earlier releases - see the full changelog',
+                $hidden_changes,
+                'ssp-changelog-emails'
+            ),
+            $hidden_changes,
+            $hidden_releases
         );
     }
 
@@ -577,12 +724,19 @@ class SSP_Changelog_Emails {
     }
 
     /**
-     * Changelog bullet lines for every version strictly newer than $since_version.
-     * Empty $since_version returns only the topmost (current) version's lines.
+     * Releases strictly newer than $since_version, newest first, each keeping the
+     * version and date from its "= 2.79.0 (25th July 2026) =" header.
      *
-     * @return string[]
+     * The header is the point. Flattening every release into one undated bullet list
+     * (which this did until 1.4.0) threw away the most persuasive thing in the email:
+     * six dated releases in three weeks is the evidence that the plugin is alive and
+     * the renewal is worth having.
+     *
+     * Empty $since_version returns only the topmost (current) release.
+     *
+     * @return array[] [ { version, date, anchor, items[] } ]
      */
-    public static function changelog_since( $slug, $since_version ) {
+    public static function releases_since( $slug, $since_version ) {
         $path = self::assets_dir() . '/' . $slug . '/readme.txt';
         if ( ! is_readable( $path ) ) {
             return array();
@@ -611,15 +765,51 @@ class SSP_Changelog_Emails {
                 break; // reached versions we've already emailed about
             }
 
-            foreach ( self::extract_bullets( $body ) as $bullet ) {
-                $out[] = $bullet;
+            // "2.79.0 (25th July 2026)" — the date is whatever is in the brackets.
+            $date = '';
+            if ( preg_match( '/\(([^)]+)\)\s*$/', $header, $dm ) ) {
+                $date = trim( $dm[1] );
             }
+
+            $out[] = array(
+                'version' => $version,
+                'date'    => $date,
+                'anchor'  => self::anchor( $version ),
+                'items'   => self::extract_bullets( $body ),
+            );
 
             if ( '' === $since_version ) {
                 break; // baseline: only the topmost block
             }
         }
         return $out;
+    }
+
+    /**
+     * Flat bullet list, kept for anything still calling the pre-1.4.0 shape.
+     *
+     * @return string[]
+     */
+    public static function changelog_since( $slug, $since_version ) {
+        $out = array();
+        foreach ( self::releases_since( $slug, $since_version ) as $release ) {
+            foreach ( $release['items'] as $item ) {
+                $out[] = $item;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Deep-link anchor for a release on the public changelog page: 2.79.0 -> v2-79-0.
+     *
+     * Mirrors SSP_Changelog_Readme::anchor() in ssp-changelogs, which is the source
+     * of truth for the page these links land on. Duplicated rather than called so
+     * this plugin stays standalone; if that format changes, change it here too.
+     */
+    private static function anchor( $version ) {
+        $slug = strtolower( preg_replace( '/[^A-Za-z0-9]+/', '-', (string) $version ) );
+        return 'v' . trim( $slug, '-' );
     }
 
     /** Pull "* ..." bullets from a changelog block, stripped to plain text. */
