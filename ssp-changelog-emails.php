@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
- * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of the three support-email filters — read each plugin's readme.txt and email owners when a new version ships. Adapt the product→slug map and the readme location to your own setup.
- * Version:     1.2.0
+ * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. Adapt the product→slug map and the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
+ * Version:     1.2.1
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later
@@ -20,7 +20,8 @@
  *   should_send          (per product) — is there news? (the version advanced)
  *   content              (per product/recipient) — fills {changelog} etc. in the body
  *   should_send_to_user  (per owner)   — should THIS person get it?
- *   on_sent              — advance the "last emailed version" baseline
+ *   on_complete          (per product) — advance the "last emailed version" baseline,
+ *                                        once the product's whole fan-out is done
  *
  * Each callback receives an SSE_Support_Context. In product mode it carries
  * ->product_id, ->subscriber, ->matching_product, ->all_products (+ ->owns(),
@@ -70,6 +71,14 @@ class SSP_Changelog_Emails {
      * when creating a Support Email, and the editor then shows our placeholders.
      */
     public static function register_type() {
+        // Which callback advances the baseline depends on the engine. on_complete
+        // (fired once the product's fan-out finishes) is the correct home for it,
+        // but only engines from 1.11.2 dispatch it — on an older one it would never
+        // fire, the baseline would never move, and every daily run would email the
+        // same changelog again. So fall back to the per-recipient on_sent there.
+        // This keeps BOTH deploy orders safe: neither plugin has to land first.
+        $baseline_hook = self::engine_has_on_complete() ? 'on_complete' : 'on_sent';
+
         sse_register_support_email_type( 'changelog', array(
             'label'        => __( 'Changelog (product update)', 'ssp-changelog-emails' ),
             'mode'         => 'per_product',
@@ -84,9 +93,18 @@ class SSP_Changelog_Emails {
                 'should_send'         => array( __CLASS__, 'should_send' ),
                 'should_send_to_user' => array( __CLASS__, 'should_send_to_user' ),
                 'content'             => array( __CLASS__, 'content' ),
-                'on_sent'             => array( __CLASS__, 'on_sent' ),
+                $baseline_hook        => array( __CLASS__, 'on_complete' ),
             ),
         ) );
+    }
+
+    /**
+     * Does the installed Super Speedy Emails dispatch the on_complete callback?
+     * Added in 1.11.2. Absent SSE_VERSION we assume the older contract, which is the
+     * safe guess: on_sent always fires, on_complete might not.
+     */
+    private static function engine_has_on_complete() {
+        return defined( 'SSE_VERSION' ) && version_compare( SSE_VERSION, '1.11.2', '>=' );
     }
 
     /* --------------------------------------------------------------------- */
@@ -137,7 +155,7 @@ class SSP_Changelog_Emails {
     }
 
     /* --------------------------------------------------------------------- */
-    /* FILTER 1 — should a support email be sent for this product?            */
+    /* CALLBACK 1 — should a support email be sent for this product?           */
     /* --------------------------------------------------------------------- */
 
     /**
@@ -152,7 +170,10 @@ class SSP_Changelog_Emails {
     public static function should_send( $should, $context ) {
         $slug = self::slug_for( isset( $context->product_id ) ? $context->product_id : 0 );
         if ( ! $slug ) {
-            return $should; // not one of ours — leave any other implementation's decision
+            // Ticked in the Support Email but absent from the product map: we have no
+            // readme to read, so content() cannot fill {changelog} either. Refuse,
+            // rather than send a body with our own placeholders left in it.
+            return false;
         }
 
         $current = self::current_version( $slug );
@@ -177,7 +198,7 @@ class SSP_Changelog_Emails {
     }
 
     /* --------------------------------------------------------------------- */
-    /* FILTER 2 — what does the email say?                                     */
+    /* CALLBACK 2 — what does the email say?                                   */
     /* --------------------------------------------------------------------- */
 
     /**
@@ -245,7 +266,7 @@ class SSP_Changelog_Emails {
     }
 
     /* --------------------------------------------------------------------- */
-    /* FILTER 3 — should THIS specific owner receive it? (optional)           */
+    /* CALLBACK 3 — should THIS specific owner receive it? (optional)         */
     /* --------------------------------------------------------------------- */
 
     /**
@@ -269,18 +290,29 @@ class SSP_Changelog_Emails {
     }
 
     /* --------------------------------------------------------------------- */
-    /* ACTION — advance the stored version after a successful send            */
+    /* CALLBACK 4 — advance the stored version after a successful send        */
     /* --------------------------------------------------------------------- */
 
     /**
-     * Fires once per queued email. Advancing to the same value repeatedly is
-     * idempotent; the net effect is "this product's baseline is now the version
-     * we just emailed about." Done here (after a successful queue) rather than in
-     * should_send so a mid-run failure can't skip a release.
+     * Fires ONCE per product, after every one of its recipients has been queued
+     * (or legitimately skipped). The net effect is "this product's baseline is now
+     * the version we just emailed about."
      *
-     * @param SSE_Support_Context $context
+     * Deliberately NOT the per-recipient on_sent callback. Advancing there moved the
+     * baseline on recipient one of the run, so a run that died partway through a
+     * large audience left everyone it had not reached stranded until the next
+     * version bump. Waiting for the fan-out to finish means a mid-run failure just
+     * leaves the baseline alone: the next run re-covers the product, and the engine's
+     * per-day guard stops anyone already queued being emailed twice.
+     *
+     * On a pre-1.11.2 engine this is wired to on_sent instead (see register_type),
+     * so it may run per recipient there. Writing the same value repeatedly is
+     * idempotent — update_option() does not touch the DB when nothing changed — so
+     * the method is correct either way; only the stranding protection is lost.
+     *
+     * @param SSE_Support_Context $context  product-level (no subscriber).
      */
-    public static function on_sent( $context ) {
+    public static function on_complete( $context ) {
         $slug = self::slug_for( isset( $context->product_id ) ? $context->product_id : 0 );
         if ( ! $slug ) {
             return;

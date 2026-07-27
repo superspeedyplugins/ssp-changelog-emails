@@ -3,20 +3,23 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.1
 License: GPL-2.0-or-later
 
-A worked reference implementation of the Super Speedy Emails support-email filters: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
+A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
 
 == Description ==
 
-Super Speedy Emails ships a generic support-email engine — it resolves the audience, applies the suppression gate, deduplicates, queues, sends and logs, but knows nothing about *what* to send or *when*. It asks three filters for that policy:
+Super Speedy Emails ships a generic support-email engine — it resolves the audience, applies the suppression gate, deduplicates, queues, sends and logs, but knows nothing about *what* to send or *when*. A plugin supplies that policy by registering a support-email TYPE with `sse_register_support_email_type()`, giving it callbacks:
 
-* `sse_should_send_support_email` — (per product) is there news to send?
-* `sse_support_email_content` — (per product) the subject + body
-* `sse_support_email_should_send_to_user` — (per owner) should THIS person get it?
+* `should_send` — (per product) is there news to send?
+* `content` — (per product/recipient) fills the type's placeholders in the admin's body
+* `should_send_to_user` — (per owner) should THIS person get it?
+* `on_sent` — advance whatever baseline the type keeps
 
-This plugin implements those three filters for the "read a readme.txt changelog" case, and is the same implementation Super Speedy Plugins uses to email its own customers when a plugin updates.
+Admins then create Support Emails *of* that type in wp-admin, and the editor lists the type's own placeholders.
+
+This plugin registers the `changelog` type (mode `per_product`) for the "read a readme.txt changelog" case, and is the same implementation Super Speedy Plugins uses to email its own customers when a plugin updates. It requires Super Speedy Emails 1.11.0 or later; on an older engine it registers nothing and sends nothing.
 
 **To adapt it to your own products:**
 
@@ -35,6 +38,11 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.2.1 (27th July 2026) =
+* The "last emailed version" baseline now advances in the new `on_complete` callback, once a product's whole fan-out has finished, instead of per recipient in `on_sent`. Previously the baseline moved on the first recipient of a run, so a run that died partway through a large audience (a PHP timeout while queueing, say) left everyone it had not reached without that version's changelog until the next release. On a Super Speedy Emails older than 1.11.2, which does not dispatch `on_complete`, the baseline falls back to advancing in `on_sent` as before, so the two plugins can be deployed in either order.
+* Fixed: a product ticked in the Support Email but missing from `product_map()` no longer sends. There is no readme.txt to read for an unmapped product, so `{changelog}` could never be filled and the raw placeholder shipped in the email. `should_send` now returns false for an unmapped product.
+* Description updated to describe the type registry rather than the retired loose filters, and the Stable tag corrected (it was left at 1.1.0 when 1.2.0 shipped).
 
 = 1.2.0 =
 * Refactored onto the Super Speedy Emails Support Email type registry: registers a `changelog` type via `sse_register_support_email_type()` instead of the three loose support-email filters. Behaviour is unchanged - `{changelog}` / `{changelog_url}` / `{version}` substitution and per-owner sending work exactly as before - but the type is now selectable in the Support Email editor, which lists its placeholders. Requires Super Speedy Emails 1.11.0+ (the type registry).
