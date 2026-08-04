@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.5.0
+Stable tag: 1.6.0
 License: GPL-2.0-or-later
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
@@ -39,6 +39,13 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.6.0 (4th August 2026) =
+* New "Send to" dropdown on each changelog Support Email: all owners, or active licences only. It is an option on the record, so two Support Emails for the same products can target different audiences without any code.
+* Active licence means any one of: bought or renewed within the last year, a renewal date still in the future, or a lifetime licence. Lifetime customers therefore keep receiving update emails for as long as they want them, and only ever stop by unsubscribing.
+* A customer who got the plugin in a bundle usually has no licence record of their own, so they count as active while their bundle purchase is under a year old.
+* Preview honours the dropdown before you save, so you can see how many people each choice reaches before committing to it.
+* Requires Super Speedy Emails 1.16.0+ for the dropdown. On an older version the option is not shown and every changelog email goes to all owners, exactly as before.
 
 = 1.5.0 (27th July 2026) =
 * `{changelog}` now shows TODAY'S release only, and only its first 3 items. The rest is a number and a link: "And 2 more items in this release and 19 more items you do not already have. See the full changelog." Both halves are counted honestly, either half is dropped when its count is zero, and the whole line disappears when the email already shows everything.

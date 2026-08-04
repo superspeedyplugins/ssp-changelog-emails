@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.5.0
+ * Version:     1.6.0
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-2.0-or-later
@@ -19,9 +19,16 @@
  * This plugin registers the 'changelog' type (mode per_product) with:
  *   should_send          (per product) — is there news? (the version advanced)
  *   content              (per product/recipient) — fills {changelog} etc. in the body
- *   should_send_to_user  (per owner)   — should THIS person get it?
+ *   should_send_to_user  (per owner)   — should THIS person get it? Driven by the
+ *                                        record's "Send to" option: all owners, or
+ *                                        active licences only
  *   on_complete          (per product) — advance the "last emailed version" baseline,
  *                                        once the product's whole fan-out is done
+ *
+ * It also declares an ADMIN FIELD (`audience_scope`), so the audience choice lives in
+ * the Support Email editor rather than in this file: the engine renders the dropdown,
+ * stores it on the record, honours it in Preview, and hands it back to the gate via
+ * $context->setting(). That is the pattern to copy for any per-record option.
  *
  * Each callback receives an SSE_Support_Context. In product mode it carries
  * ->product_id, ->subscriber, ->matching_product, ->all_products (+ ->owns(),
@@ -58,6 +65,12 @@ class SSP_Changelog_Emails {
 
     /** Derived product→slug map, cached against a signature of its sources. */
     const MAP_TRANSIENT  = 'ssp_changelog_product_map';
+
+    /**
+     * How recent a purchase counts as an active licence, when we have no renewal
+     * date to go on. A year, because that is the term we sell.
+     */
+    const ACTIVE_LICENCE_DAYS = 365;
 
     public static function init() {
         // Only wire up if the core engine (with the type registry) is present.
@@ -98,6 +111,24 @@ class SSP_Changelog_Emails {
                 '{version}'       => __( 'The current version', 'ssp-changelog-emails' ),
             ),
             'footer'       => __( "You're receiving this because you own {product_name}.", 'ssp-changelog-emails' ),
+            // Per-record options the admin picks in the Support Email editor. The
+            // engine renders these, stores them on the record and hands them back
+            // through $context->setting() — no per-record code, and Preview honours a
+            // change before it is saved. Needs Super Speedy Emails 1.16.0+; on an
+            // older engine the field simply is not rendered and the gate below falls
+            // back to 'all', so BOTH deploy orders stay safe.
+            'admin_fields' => array(
+                'audience_scope' => array(
+                    'type'        => 'select',
+                    'label'       => __( 'Send to', 'ssp-changelog-emails' ),
+                    'description' => __( 'All owners, or only those on an active licence (bought or renewed within the last year, or a renewal date still in the future, or a lifetime licence).', 'ssp-changelog-emails' ),
+                    'default'     => 'all',
+                    'options'     => array(
+                        array( 'value' => 'all',            'label' => __( 'All owners', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'active_licence', 'label' => __( 'Active licence only', 'ssp-changelog-emails' ) ),
+                    ),
+                ),
+            ),
             'callbacks'    => array(
                 'should_send'         => array( __CLASS__, 'should_send' ),
                 'should_send_to_user' => array( __CLASS__, 'should_send_to_user' ),
@@ -729,23 +760,76 @@ class SSP_Changelog_Emails {
     /* --------------------------------------------------------------------- */
 
     /**
-     * Per-recipient gate. Default: everyone who owns the product and isn't
-     * suppressed gets it (we just return $send unchanged). This is where you'd
-     * add per-customer policy — e.g. active-licence-only, a region, recency.
-     * Left as a pass-through here, included to show the hook + its context.
+     * Per-recipient gate. What it does is the admin's choice, not ours: the record's
+     * "Send to" option (declared in register_type as an admin_field) picks between
+     * every owner and only those on an active licence.
      *
      * @param bool                $send
      * @param SSE_Support_Context $context  has ->subscriber, ->product_id,
      *                                       ->matching_product, ->all_products
      */
     public static function should_send_to_user( $send, $context ) {
-        // Example you could enable:
-        //   if ( $context->is_product_mode()
-        //        && $context->matching_product
-        //        && ! $context->matching_product->direct ) {
-        //       return false; // skip bundle-only owners for changelog emails
-        //   }
-        return $send;
+        if ( ! $send ) {
+            return false;
+        }
+        // Older engines have no settings on the context: treat that as "all owners",
+        // which is exactly what this plugin did before the option existed.
+        $scope = method_exists( $context, 'setting' ) ? $context->setting( 'audience_scope', 'all' ) : 'all';
+        if ( 'active_licence' !== $scope ) {
+            return true;
+        }
+        return self::has_active_licence( $context );
+    }
+
+    /**
+     * Is this person's licence for the product in context still current?
+     *
+     * Any ONE of these is enough:
+     *   - they bought or renewed it within the last year;
+     *   - their renewal date is still in the future;
+     *   - they hold a lifetime licence (which never expires, and for which
+     *     ssp-product-renewals deliberately stores NO renewal date).
+     *
+     * The renewal date and tier are owner meta on the ownership row, written by
+     * ssp-product-renewals when it ingests an order. Super Speedy Emails itself knows
+     * nothing about licences; it just carries the meta through on the context, batched
+     * once per run.
+     *
+     * A bundle owner (direct = 0) usually has no licence meta of their own, so they
+     * qualify through the one-year limb while their bundle purchase is recent and drop
+     * out afterwards. That is the intended reading of "active": we do not have a
+     * separate licence record to consult for them.
+     */
+    private static function has_active_licence( $context ) {
+        $row = $context->matching_product;
+        if ( ! $row ) {
+            // per_user mode, or an ownership row we could not resolve. Nothing to
+            // judge them on, so do not silently drop them.
+            return true;
+        }
+
+        // 1. Bought or renewed within the last year.
+        if ( null !== $row->days_since_last && $row->days_since_last <= self::ACTIVE_LICENCE_DAYS ) {
+            return true;
+        }
+
+        $meta = ( isset( $row->meta ) && is_array( $row->meta ) ) ? $row->meta : array();
+
+        // 2. A lifetime licence never expires.
+        if ( isset( $meta['license_tier'] ) && 'lifetime' === $meta['license_tier'] ) {
+            return true;
+        }
+
+        // 3. A renewal date still in the future. Stored as Y-m-d (UTC) by
+        //    ssp-product-renewals; compared as a date, so "expires today" still counts.
+        if ( ! empty( $meta['renewal_date'] ) ) {
+            $renewal = strtotime( $meta['renewal_date'] . ' 23:59:59 UTC' );
+            if ( $renewal && $renewal >= time() ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /* --------------------------------------------------------------------- */
