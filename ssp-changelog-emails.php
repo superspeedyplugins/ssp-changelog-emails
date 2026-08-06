@@ -2,10 +2,11 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.0
+ * Version:     1.6.1
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
- * License:     GPL-2.0-or-later
+ * License:     GPL-3.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-3.0.html
  * Requires Plugins: super-speedy-emails
  *
  * HOW THIS WORKS
@@ -883,15 +884,25 @@ class SSP_Changelog_Emails {
      * filesystem, never over HTTP.
      */
     public static function current_version( $slug ) {
-        $path = self::assets_dir() . '/' . $slug . '.json';
-        if ( ! is_readable( $path ) ) {
-            return '';
+        // Memoised per request. The content callback runs once per RECIPIENT, so on a
+        // 3,000-owner product an unmemoised read is 3,000 stats and 3,000 file reads
+        // for a file that cannot change mid-run.
+        static $cache = array();
+        if ( isset( $cache[ $slug ] ) ) {
+            return $cache[ $slug ];
         }
-        $data = json_decode( (string) file_get_contents( $path ), true );
-        if ( ! is_array( $data ) || empty( $data['version'] ) ) {
-            return '';
+
+        $version = '';
+        $path    = self::assets_dir() . '/' . $slug . '.json';
+        if ( is_readable( $path ) ) {
+            $data = json_decode( (string) file_get_contents( $path ), true );
+            if ( is_array( $data ) && ! empty( $data['version'] ) ) {
+                $version = sanitize_text_field( (string) $data['version'] );
+            }
         }
-        return sanitize_text_field( (string) $data['version'] );
+
+        $cache[ $slug ] = $version;
+        return $version;
     }
 
     /**
@@ -908,13 +919,26 @@ class SSP_Changelog_Emails {
      * @return array[] [ { version, date, anchor, items[] } ]
      */
     public static function releases_since( $slug, $since_version ) {
+        // Memoised on BOTH arguments, per request. Same reason as current_version():
+        // this runs per recipient. Keying on the slug alone would be worse than not
+        // caching at all - one dispatch asks for two different $since_version values
+        // (today's release, and everything since the reader's own version), so a
+        // slug-only cache would hand back the wrong release set.
+        static $cache = array();
+        $key = $slug . '|' . $since_version;
+        if ( isset( $cache[ $key ] ) ) {
+            return $cache[ $key ];
+        }
+
         $path = self::assets_dir() . '/' . $slug . '/readme.txt';
         if ( ! is_readable( $path ) ) {
+            $cache[ $key ] = array();
             return array();
         }
         $raw = (string) file_get_contents( $path );
 
         if ( ! preg_match( '/==\s*Changelog\s*==(.*)/is', $raw, $m ) ) {
+            $cache[ $key ] = array();
             return array();
         }
         $section = $m[1];
@@ -953,6 +977,8 @@ class SSP_Changelog_Emails {
                 break; // baseline: only the topmost block
             }
         }
+
+        $cache[ $key ] = $out;
         return $out;
     }
 

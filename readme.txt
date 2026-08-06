@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.6.0
+Stable tag: 1.6.1
 License: GPL-2.0-or-later
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
@@ -39,6 +39,10 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.6.1 (6th August 2026) =
+* Each plugin's version file and changelog are read once per send rather than once per recipient. The email code asks for them for every person on the list, and on a plugin with a few thousand owners that was several thousand file reads for a file that cannot change mid-send.
+* Requires Super Speedy Emails 1.17.0 for the "changes you do not have yet" count to be each reader's own. On an earlier version that count is the same number for everyone, whatever this plugin works out.
 
 = 1.6.0 (4th August 2026) =
 * New "Send to" dropdown on each changelog Support Email: all owners, or active licences only. It is an option on the record, so two Support Emails for the same products can target different audiences without any code.
