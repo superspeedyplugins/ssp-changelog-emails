@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.1
+ * Version:     1.6.2
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -21,8 +21,8 @@
  *   should_send          (per product) — is there news? (the version advanced)
  *   content              (per product/recipient) — fills {changelog} etc. in the body
  *   should_send_to_user  (per owner)   — should THIS person get it? Driven by the
- *                                        record's "Send to" option: all owners, or
- *                                        active licences only
+ *                                        record's "Send to" option: all owners,
+ *                                        active licences, or an expiry-age band
  *   on_complete          (per product) — advance the "last emailed version" baseline,
  *                                        once the product's whole fan-out is done
  *
@@ -48,9 +48,11 @@ class SSP_Changelog_Emails {
     const LIVE_BASE      = '/var/www/superspeedyplugins.com/htdocs/assets/plugins';
 
     /**
-     * Per-plugin "last version we emailed about" is stored in this option + slug.
-     * NOTE: this is the same key the previously-bundled core class used, so any
-     * baselines already recorded on a live site carry over with no re-baseline.
+     * Per-record "last version we emailed about" is stored in this option + slug
+     * + support-email ID. The old shared option + slug remains the migration
+     * fallback, so every existing/new record can inherit the live baseline once
+     * without one audience consuming the release for another. The shared fallback
+     * advances only after every changelog record targeting that product catches up.
      */
     const VERSION_OPTION = 'sse_support_last_sent_version_';
 
@@ -122,11 +124,14 @@ class SSP_Changelog_Emails {
                 'audience_scope' => array(
                     'type'        => 'select',
                     'label'       => __( 'Send to', 'ssp-changelog-emails' ),
-                    'description' => __( 'All owners, or only those on an active licence (bought or renewed within the last year, or a renewal date still in the future, or a lifetime licence).', 'ssp-changelog-emails' ),
+                    'description' => __( 'Target all owners, active licences, or one mutually exclusive expired-licence age band. When no renewal date is stored, a yearly licence is treated as expiring 365 days after its last purchase.', 'ssp-changelog-emails' ),
                     'default'     => 'all',
                     'options'     => array(
-                        array( 'value' => 'all',            'label' => __( 'All owners', 'ssp-changelog-emails' ) ),
-                        array( 'value' => 'active_licence', 'label' => __( 'Active licence only', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'all',                         'label' => __( 'All owners', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'active_licence',              'label' => __( 'Active licence only', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'expired_within_6_months',     'label' => __( 'Expired within the last 6 months', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'expired_6_to_12_months',      'label' => __( 'Expired 6 to 12 months ago', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'expired_over_12_months',      'label' => __( 'Expired more than 12 months ago', 'ssp-changelog-emails' ) ),
                     ),
                 ),
             ),
@@ -444,8 +449,8 @@ class SSP_Changelog_Emails {
             return false; // can't read a version → never send
         }
 
-        $opt  = self::VERSION_OPTION . $slug;
-        $last = get_option( $opt, '' );
+        $opt  = self::baseline_option( $slug, $context );
+        $last = self::baseline_version( $slug, $context );
 
         if ( '' === $last ) {
             // Baseline on first sight, email nobody. NEVER write during preview —
@@ -617,7 +622,7 @@ class SSP_Changelog_Emails {
      */
     private static function counting_baseline( $context, $slug, $current ) {
         $fallback = array(
-            'version' => (string) get_option( self::VERSION_OPTION . $slug, '' ),
+            'version' => self::baseline_version( $slug, $context ),
             'known'   => false,
         );
 
@@ -763,7 +768,7 @@ class SSP_Changelog_Emails {
     /**
      * Per-recipient gate. What it does is the admin's choice, not ours: the record's
      * "Send to" option (declared in register_type as an admin_field) picks between
-     * every owner and only those on an active licence.
+     * every owner, active licences and mutually exclusive expiry-age bands.
      *
      * @param bool                $send
      * @param SSE_Support_Context $context  has ->subscriber, ->product_id,
@@ -776,10 +781,18 @@ class SSP_Changelog_Emails {
         // Older engines have no settings on the context: treat that as "all owners",
         // which is exactly what this plugin did before the option existed.
         $scope = method_exists( $context, 'setting' ) ? $context->setting( 'audience_scope', 'all' ) : 'all';
-        if ( 'active_licence' !== $scope ) {
-            return true;
+        if ( 'active_licence' === $scope ) {
+            return self::has_active_licence( $context );
         }
-        return self::has_active_licence( $context );
+
+        if ( in_array( $scope, array( 'expired_within_6_months', 'expired_6_to_12_months', 'expired_over_12_months' ), true ) ) {
+            return self::is_in_expiry_band( $context, $scope );
+        }
+
+        // `all`, an older engine with no settings, or a stored value from a field
+        // declaration this version does not know. The registry sanitises new saves
+        // to `all`; retaining the old permissive fallback keeps deploy order safe.
+        return true;
     }
 
     /**
@@ -833,6 +846,74 @@ class SSP_Changelog_Emails {
         return false;
     }
 
+    /**
+     * Does an expired licence sit in the selected calendar-month age band?
+     *
+     * Bands do not overlap:
+     *   - expired_within_6_months: expiry >= six calendar months ago;
+     *   - expired_6_to_12_months:  expiry < six and >= twelve months ago;
+     *   - expired_over_12_months:  expiry < twelve months ago.
+     *
+     * Active and lifetime licences never enter an expired band. Renewal dates are
+     * authoritative when present. Older ownership rows and bundle-derived owners
+     * may have no renewal meta, so their expiry is estimated from the same fallback
+     * the active gate already uses: last purchase plus 365 days.
+     */
+    private static function is_in_expiry_band( $context, $scope ) {
+        if ( self::has_active_licence( $context ) ) {
+            return false;
+        }
+
+        $expired_at = self::licence_expired_at( $context );
+        if ( ! $expired_at ) {
+            return false;
+        }
+
+        $now               = time();
+        $six_months_ago    = strtotime( '-6 months', $now );
+        $twelve_months_ago = strtotime( '-12 months', $now );
+
+        if ( 'expired_within_6_months' === $scope ) {
+            return $expired_at >= $six_months_ago;
+        }
+        if ( 'expired_6_to_12_months' === $scope ) {
+            return $expired_at < $six_months_ago && $expired_at >= $twelve_months_ago;
+        }
+        return $expired_at < $twelve_months_ago;
+    }
+
+    /**
+     * Unix timestamp at which the licence expired, or 0 when it cannot be known.
+     * Called only after has_active_licence() has ruled out current/lifetime rows.
+     */
+    private static function licence_expired_at( $context ) {
+        $row = $context->matching_product;
+        if ( ! $row ) {
+            return 0;
+        }
+
+        $meta = ( isset( $row->meta ) && is_array( $row->meta ) ) ? $row->meta : array();
+        if ( ! empty( $meta['renewal_date'] ) ) {
+            $renewal = strtotime( $meta['renewal_date'] . ' 23:59:59 UTC' );
+            if ( $renewal ) {
+                return $renewal;
+            }
+        }
+
+        if ( ! empty( $row->last_purchased_at ) ) {
+            $purchased = strtotime( $row->last_purchased_at . ' UTC' );
+            if ( $purchased ) {
+                return $purchased + self::ACTIVE_LICENCE_DAYS * DAY_IN_SECONDS;
+            }
+        }
+
+        if ( null !== $row->days_since_last && $row->days_since_last > self::ACTIVE_LICENCE_DAYS ) {
+            return time() - ( $row->days_since_last - self::ACTIVE_LICENCE_DAYS ) * DAY_IN_SECONDS;
+        }
+
+        return 0;
+    }
+
     /* --------------------------------------------------------------------- */
     /* CALLBACK 4 — advance the stored version after a successful send        */
     /* --------------------------------------------------------------------- */
@@ -863,6 +944,60 @@ class SSP_Changelog_Emails {
         }
         $current = self::current_version( $slug );
         if ( '' !== $current ) {
+            $option = self::baseline_option( $slug, $context );
+            update_option( $option, $current );
+            if ( $option !== self::VERSION_OPTION . $slug ) {
+                self::maybe_advance_legacy_baseline( $slug, (int) $context->product_id, $current );
+            }
+        }
+    }
+
+    /** Per-record baseline option; ID-less/old contexts retain the legacy key. */
+    private static function baseline_option( $slug, $context ) {
+        $option = self::VERSION_OPTION . $slug;
+        $id     = isset( $context->support_email_id ) ? (int) $context->support_email_id : 0;
+        return $id > 0 ? $option . '_' . $id : $option;
+    }
+
+    /**
+     * Read this record's baseline, falling back to the old shared live baseline.
+     * The fallback is deliberately read-only: advancing it would let record one
+     * consume a release before record two has had its own fan-out.
+     */
+    private static function baseline_version( $slug, $context ) {
+        $legacy = self::VERSION_OPTION . $slug;
+        $option = self::baseline_option( $slug, $context );
+        $version = (string) get_option( $option, '' );
+        if ( '' !== $version || $option === $legacy ) {
+            return $version;
+        }
+        return (string) get_option( $legacy, '' );
+    }
+
+    /**
+     * Move the shared migration baseline only when every changelog record targeting
+     * this product has completed the same release. This preserves the old baseline
+     * while a second audience still needs it, then prevents a record created later
+     * from replaying the entire historical gap.
+     */
+    private static function maybe_advance_legacy_baseline( $slug, $product_id, $current ) {
+        if ( ! class_exists( 'SSE_Support_Rules' ) ) {
+            return;
+        }
+
+        $found = false;
+        foreach ( SSE_Support_Rules::get_all() as $record ) {
+            if ( 'changelog' !== (string) $record->type || ! in_array( $product_id, (array) $record->product_ids, true ) ) {
+                continue;
+            }
+            $found  = true;
+            $version = (string) get_option( self::VERSION_OPTION . $slug . '_' . (int) $record->id, '' );
+            if ( '' === $version || version_compare( $version, $current, '<' ) ) {
+                return;
+            }
+        }
+
+        if ( $found ) {
             update_option( self::VERSION_OPTION . $slug, $current );
         }
     }

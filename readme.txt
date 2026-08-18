@@ -3,8 +3,9 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.6.1
-License: GPL-2.0-or-later
+Stable tag: 1.6.2
+License: GPL-3.0-or-later
+License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
 A worked reference implementation of a Super Speedy Emails support-email type: read each plugin's readme.txt changelog and email the plugin's owners when a new version ships.
 
@@ -27,7 +28,7 @@ This plugin registers the `changelog` type (mode `per_product`) for the "read a 
 2. Edit `LIVE_BASE` (or define `SSE_SUPPORT_ASSETS_DIR`, or hook `sse_support_assets_dir`) to point at where your plugins' `{slug}/readme.txt` and `{slug}.json` files live on disk.
 3. Edit `CHANGELOG_URL` to your public changelog base URL.
 
-Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick the products to monitor, set the subject to "Updates available for {product_name}", and write the body however you like — dropping the `{changelog}` placeholder wherever you want the update notes to appear. Save it Active. On the first run for each plugin the current version is recorded as a baseline and nobody is emailed; after that, each version bump emails its owners once per day at most. Use Preview to see the per-product reach before sending.
+Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick the products to monitor, choose all owners, active licences, or one of the three expired-licence age bands, set the subject to "Updates available for {product_name}", and write the body however you like — dropping the `{changelog}` placeholder wherever you want the update notes to appear. Save it Active. On the first run for each plugin the current version is recorded as a baseline and nobody is emailed; after that, each version bump emails its owners once per day at most. Use Preview to see the per-product reach before sending.
 
 **Placeholders this plugin fills in the body:**
 
@@ -39,6 +40,12 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.6.2 (18th August 2026) =
+* Three new "Send to" audiences on each changelog Support Email: licences expired within the last 6 months, expired 6 to 12 months ago, and expired more than 12 months ago. The bands never overlap, so separate records can cover the whole expired base without anyone receiving two emails.
+* A licence with no stored renewal date is treated as expiring 365 days after its last purchase, matching how active licences are already judged.
+* Each changelog Support Email now keeps its own "last emailed version" baseline, so two records for the same product advance independently and one record's send no longer uses up the release for another. Existing baselines carry over automatically.
+* Corrected the licence declaration in readme.txt to GPL 3.
 
 = 1.6.1 (6th August 2026) =
 * Each plugin's version file and changelog are read once per send rather than once per recipient. The email code asks for them for every person on the list, and on a plugin with a few thousand owners that was several thousand file reads for a file that cannot change mid-send.
