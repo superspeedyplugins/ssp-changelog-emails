@@ -3,7 +3,7 @@ Contributors: superspeedy
 Requires Plugins: super-speedy-emails
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.6.2
+Stable tag: 1.6.3
 License: GPL-3.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
@@ -28,7 +28,7 @@ This plugin registers the `changelog` type (mode `per_product`) for the "read a 
 2. Edit `LIVE_BASE` (or define `SSE_SUPPORT_ASSETS_DIR`, or hook `sse_support_assets_dir`) to point at where your plugins' `{slug}/readme.txt` and `{slug}.json` files live on disk.
 3. Edit `CHANGELOG_URL` to your public changelog base URL.
 
-Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick the products to monitor, choose all owners, active licences, or one of the three expired-licence age bands, set the subject to "Updates available for {product_name}", and write the body however you like — dropping the `{changelog}` placeholder wherever you want the update notes to appear. Save it Active. On the first run for each plugin the current version is recorded as a baseline and nobody is emailed; after that, each version bump emails its owners once per day at most. Use Preview to see the per-product reach before sending.
+Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick the products to monitor, choose all owners, active licences, one of the three expired-licence age bands, or everyone expired more than six months ago, set the subject to "Updates available for {product_name}", and write the body however you like — dropping the `{changelog}` placeholder wherever you want the update notes to appear. Save it Active. On the first run for each plugin the current version is recorded as a baseline and nobody is emailed; after that, each version bump emails its owners once per day at most. Use Preview to see the per-product reach before sending.
 
 **Placeholders this plugin fills in the body:**
 

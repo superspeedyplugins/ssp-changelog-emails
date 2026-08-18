@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.2
+ * Version:     1.6.3
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -22,7 +22,8 @@
  *   content              (per product/recipient) — fills {changelog} etc. in the body
  *   should_send_to_user  (per owner)   — should THIS person get it? Driven by the
  *                                        record's "Send to" option: all owners,
- *                                        active licences, or an expiry-age band
+ *                                        active licences, an expiry-age band,
+ *                                        or every licence expired over 6 months
  *   on_complete          (per product) — advance the "last emailed version" baseline,
  *                                        once the product's whole fan-out is done
  *
@@ -124,12 +125,13 @@ class SSP_Changelog_Emails {
                 'audience_scope' => array(
                     'type'        => 'select',
                     'label'       => __( 'Send to', 'ssp-changelog-emails' ),
-                    'description' => __( 'Target all owners, active licences, or one mutually exclusive expired-licence age band. When no renewal date is stored, a yearly licence is treated as expiring 365 days after its last purchase.', 'ssp-changelog-emails' ),
+                    'description' => __( 'Target all owners, active licences, one mutually exclusive expired-licence age band, or everyone expired more than 6 months ago. When no renewal date is stored, a yearly licence is treated as expiring 365 days after its last purchase.', 'ssp-changelog-emails' ),
                     'default'     => 'all',
                     'options'     => array(
                         array( 'value' => 'all',                         'label' => __( 'All owners', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'active_licence',              'label' => __( 'Active licence only', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_within_6_months',     'label' => __( 'Expired within the last 6 months', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'expired_over_6_months',       'label' => __( 'Expired more than 6 months ago', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_6_to_12_months',      'label' => __( 'Expired 6 to 12 months ago', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_over_12_months',      'label' => __( 'Expired more than 12 months ago', 'ssp-changelog-emails' ) ),
                     ),
@@ -768,7 +770,8 @@ class SSP_Changelog_Emails {
     /**
      * Per-recipient gate. What it does is the admin's choice, not ours: the record's
      * "Send to" option (declared in register_type as an admin_field) picks between
-     * every owner, active licences and mutually exclusive expiry-age bands.
+     * every owner, active licences, mutually exclusive expiry-age bands, and
+     * the combined audience of every licence expired more than six months ago.
      *
      * @param bool                $send
      * @param SSE_Support_Context $context  has ->subscriber, ->product_id,
@@ -785,7 +788,7 @@ class SSP_Changelog_Emails {
             return self::has_active_licence( $context );
         }
 
-        if ( in_array( $scope, array( 'expired_within_6_months', 'expired_6_to_12_months', 'expired_over_12_months' ), true ) ) {
+        if ( in_array( $scope, array( 'expired_within_6_months', 'expired_over_6_months', 'expired_6_to_12_months', 'expired_over_12_months' ), true ) ) {
             return self::is_in_expiry_band( $context, $scope );
         }
 
@@ -849,10 +852,11 @@ class SSP_Changelog_Emails {
     /**
      * Does an expired licence sit in the selected calendar-month age band?
      *
-     * Bands do not overlap:
+     * The three age bands do not overlap:
      *   - expired_within_6_months: expiry >= six calendar months ago;
      *   - expired_6_to_12_months:  expiry < six and >= twelve months ago;
      *   - expired_over_12_months:  expiry < twelve months ago.
+     * The expired_over_6_months scope deliberately combines the latter two.
      *
      * Active and lifetime licences never enter an expired band. Renewal dates are
      * authoritative when present. Older ownership rows and bundle-derived owners
@@ -875,6 +879,9 @@ class SSP_Changelog_Emails {
 
         if ( 'expired_within_6_months' === $scope ) {
             return $expired_at >= $six_months_ago;
+        }
+        if ( 'expired_over_6_months' === $scope ) {
+            return $expired_at < $six_months_ago;
         }
         if ( 'expired_6_to_12_months' === $scope ) {
             return $expired_at < $six_months_ago && $expired_at >= $twelve_months_ago;
