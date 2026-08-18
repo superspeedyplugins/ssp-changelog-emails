@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.5
+ * Version:     1.6.6
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -135,6 +135,12 @@ class SSP_Changelog_Emails {
                         array( 'value' => 'expired_6_to_12_months',      'label' => __( 'Expired 6 to 12 months ago', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_over_12_months',      'label' => __( 'Expired more than 12 months ago', 'ssp-changelog-emails' ) ),
                     ),
+                ),
+                'send_current_on_first_run' => array(
+                    'type'        => 'checkbox',
+                    'label'       => __( 'Send the current version on this email\'s first run', 'ssp-changelog-emails' ),
+                    'description' => __( 'Use this when creating another changelog email after a release is already published. Each selected plugin is sent once, then this email keeps its own independent last-sent version.', 'ssp-changelog-emails' ),
+                    'default'     => false,
                 ),
             ),
             'callbacks'    => array(
@@ -451,8 +457,34 @@ class SSP_Changelog_Emails {
             return false; // can't read a version → never send
         }
 
-        $opt  = self::baseline_option( $slug, $context );
-        $last = self::baseline_version( $slug, $context );
+        $opt    = self::baseline_option( $slug, $context );
+        $legacy = self::VERSION_OPTION . $slug;
+        $last   = (string) get_option( $opt, '' );
+
+        // Unsaved editor previews have no record ID yet, hence no possible
+        // per-email key. Honour the explicit first-run choice in that preview;
+        // the saved record receives its real ID before anything can be sent.
+        if ( $opt === $legacy && empty( $context->support_email_id ) && $context->is_preview && self::send_current_on_first_run( $context ) ) {
+            return true;
+        }
+
+        // A saved support email owns its own plugin baseline. A newly created email
+        // may deliberately send the already-published current release once; in that
+        // case the old shared plugin baseline must not make it look consumed.
+        if ( '' === $last && $opt !== $legacy && self::send_current_on_first_run( $context ) ) {
+            return true;
+        }
+
+        // One-time migration for records created before per-email baselines existed:
+        // copy the old shared value into THIS email's key, then stop consulting the
+        // shared key. This preserves a genuinely pending release without allowing a
+        // later send by another email to consume it.
+        if ( '' === $last && $opt !== $legacy ) {
+            $last = (string) get_option( $legacy, '' );
+            if ( '' !== $last && ! $context->is_preview ) {
+                update_option( $opt, $last );
+            }
+        }
 
         if ( '' === $last ) {
             // Baseline on first sight, email nobody. NEVER write during preview —
@@ -987,17 +1019,31 @@ class SSP_Changelog_Emails {
         return $id > 0 ? $option . '_' . $id : $option;
     }
 
+    /** Should a baseline-less saved email treat the current release as pending? */
+    private static function send_current_on_first_run( $context ) {
+        return method_exists( $context, 'setting' )
+            && (bool) $context->setting( 'send_current_on_first_run', false );
+    }
+
     /**
-     * Read this record's baseline, falling back to the old shared live baseline.
-     * The fallback is deliberately read-only: advancing it would let record one
-     * consume a release before record two has had its own fan-out.
+     * Read this record's baseline. A record configured to send the current version
+     * on first run deliberately ignores the shared migration baseline until its own
+     * first fan-out completes. Other old records may read the shared value during a
+     * side-effect-free preview; should_send() copies it into their own key on a real
+     * run, after which every record is independent.
      */
     private static function baseline_version( $slug, $context ) {
         $legacy = self::VERSION_OPTION . $slug;
         $option = self::baseline_option( $slug, $context );
         $version = (string) get_option( $option, '' );
+        if ( $option === $legacy && empty( $context->support_email_id ) && $context->is_preview && self::send_current_on_first_run( $context ) ) {
+            return '';
+        }
         if ( '' !== $version || $option === $legacy ) {
             return $version;
+        }
+        if ( self::send_current_on_first_run( $context ) ) {
+            return '';
         }
         return (string) get_option( $legacy, '' );
     }
