@@ -47,6 +47,7 @@ function ssp_changelog_test_owner_row( $renewal_date, $days_since_last = 500, $l
 
 $cases = array(
     'five months ago is excluded'     => array( '-5 months', false, 500, 'yearly' ),
+    'six months ago is included'      => array( '-6 months', true,  500, 'yearly' ),
     'seven months ago is included'    => array( '-7 months', true,  500, 'yearly' ),
     'thirteen months ago is included' => array( '-13 months', true, 500, 'yearly' ),
     'future renewal is excluded'      => array( '+1 month', false, 500, 'yearly' ),
@@ -67,6 +68,33 @@ foreach ( $cases as $label => $case ) {
         fwrite( STDERR, sprintf( "FAIL: %s. Expected %s, got %s.\n", $label, var_export( $expected, true ), var_export( $actual, true ) ) );
         exit( 1 );
     }
+}
+
+$exact_boundary = ssp_changelog_test_owner_row(
+    gmdate( 'Y-m-d', strtotime( '-6 months' ) ),
+    500,
+    'yearly'
+);
+$context = new SSP_Changelog_Expiry_Test_Context(
+    array( $exact_boundary ),
+    'expired_within_6_months'
+);
+if ( false !== SSP_Changelog_Emails::should_send_to_user( true, $context ) ) {
+    fwrite( STDERR, "FAIL: exact six-month boundary overlapped the within-six and six-plus audiences.\n" );
+    exit( 1 );
+}
+
+// Expired audiences are defined by the stored renewal/expiry date. An old
+// purchase with no renewal date is unknown, not proof that the licence expired.
+$undated = ssp_changelog_test_owner_row( '', 1095, 'yearly', true );
+$context = new SSP_Changelog_Expiry_Test_Context(
+    array( $undated ),
+    'expired_over_6_months'
+);
+$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+if ( false !== $actual ) {
+    fwrite( STDERR, "FAIL: undated ownership was inferred expired from its purchase age.\n" );
+    exit( 1 );
 }
 
 // A subscriber may own the same product directly and through a bundle. The engine

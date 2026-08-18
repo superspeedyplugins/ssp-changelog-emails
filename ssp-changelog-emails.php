@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.4
+ * Version:     1.6.5
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -125,13 +125,13 @@ class SSP_Changelog_Emails {
                 'audience_scope' => array(
                     'type'        => 'select',
                     'label'       => __( 'Send to', 'ssp-changelog-emails' ),
-                    'description' => __( 'Target all owners, active licences, one mutually exclusive expired-licence age band, or everyone expired more than 6 months ago. When no renewal date is stored, a yearly licence is treated as expiring 365 days after its last purchase.', 'ssp-changelog-emails' ),
+                    'description' => __( 'Target all owners, active licences, or an age band measured from the stored renewal/expiry date. Owners without a stored date are excluded from expired-date audiences.', 'ssp-changelog-emails' ),
                     'default'     => 'all',
                     'options'     => array(
                         array( 'value' => 'all',                         'label' => __( 'All owners', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'active_licence',              'label' => __( 'Active licence only', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_within_6_months',     'label' => __( 'Expired within the last 6 months', 'ssp-changelog-emails' ) ),
-                        array( 'value' => 'expired_over_6_months',       'label' => __( 'Expired more than 6 months ago', 'ssp-changelog-emails' ) ),
+                        array( 'value' => 'expired_over_6_months',       'label' => __( 'Renewal/expiry date passed 6+ months ago', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_6_to_12_months',      'label' => __( 'Expired 6 to 12 months ago', 'ssp-changelog-emails' ) ),
                         array( 'value' => 'expired_over_12_months',      'label' => __( 'Expired more than 12 months ago', 'ssp-changelog-emails' ) ),
                     ),
@@ -868,15 +868,14 @@ class SSP_Changelog_Emails {
      * Does an expired licence sit in the selected calendar-month age band?
      *
      * The three age bands do not overlap:
-     *   - expired_within_6_months: expiry >= six calendar months ago;
-     *   - expired_6_to_12_months:  expiry < six and >= twelve months ago;
+     *   - expired_within_6_months: expiry > six calendar months ago;
+     *   - expired_6_to_12_months:  expiry <= six and >= twelve months ago;
      *   - expired_over_12_months:  expiry < twelve months ago.
      * The expired_over_6_months scope deliberately combines the latter two.
      *
-     * Active and lifetime licences never enter an expired band. Renewal dates are
-     * authoritative when present. Older ownership rows and bundle-derived owners
-     * may have no renewal meta, so their expiry is estimated from the same fallback
-     * the active gate already uses: last purchase plus 365 days.
+     * Active and lifetime licences never enter an expired band. These audiences are
+     * measured only from the stored renewal/expiry date. Purchase age is not an
+     * expiry date, so ownership rows without that date do not enter an expired band.
      */
     private static function is_in_expiry_band( $context, $scope ) {
         if ( self::has_active_licence( $context ) ) {
@@ -888,20 +887,21 @@ class SSP_Changelog_Emails {
             return false;
         }
 
-        $now               = time();
-        $six_months_ago    = strtotime( '-6 months', $now );
-        $twelve_months_ago = strtotime( '-12 months', $now );
+        $now                    = time();
+        $expired_on             = gmdate( 'Y-m-d', $expired_at );
+        $six_months_ago_date    = gmdate( 'Y-m-d', strtotime( '-6 months', $now ) );
+        $twelve_months_ago_date = gmdate( 'Y-m-d', strtotime( '-12 months', $now ) );
 
         if ( 'expired_within_6_months' === $scope ) {
-            return $expired_at >= $six_months_ago;
+            return $expired_on > $six_months_ago_date;
         }
         if ( 'expired_over_6_months' === $scope ) {
-            return $expired_at < $six_months_ago;
+            return $expired_on <= $six_months_ago_date;
         }
         if ( 'expired_6_to_12_months' === $scope ) {
-            return $expired_at < $six_months_ago && $expired_at >= $twelve_months_ago;
+            return $expired_on <= $six_months_ago_date && $expired_on >= $twelve_months_ago_date;
         }
-        return $expired_at < $twelve_months_ago;
+        return $expired_on < $twelve_months_ago_date;
     }
 
     /**
@@ -926,17 +926,6 @@ class SSP_Changelog_Emails {
             if ( $renewal ) {
                 return $renewal;
             }
-        }
-
-        if ( ! empty( $row->last_purchased_at ) ) {
-            $purchased = strtotime( $row->last_purchased_at . ' UTC' );
-            if ( $purchased ) {
-                return $purchased + self::ACTIVE_LICENCE_DAYS * DAY_IN_SECONDS;
-            }
-        }
-
-        if ( null !== $row->days_since_last && $row->days_since_last > self::ACTIVE_LICENCE_DAYS ) {
-            return time() - ( $row->days_since_last - self::ACTIVE_LICENCE_DAYS ) * DAY_IN_SECONDS;
         }
 
         return 0;
