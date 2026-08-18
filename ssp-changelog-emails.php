@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.3
+ * Version:     1.6.4
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -812,19 +812,34 @@ class SSP_Changelog_Emails {
      * nothing about licences; it just carries the meta through on the context, batched
      * once per run.
      *
+     * A subscriber can have more than one ownership row for the same product, such
+     * as a direct purchase plus bundle ownership. Any active row makes the subscriber
+     * active; row order must never decide which audience they enter.
+     *
      * A bundle owner (direct = 0) usually has no licence meta of their own, so they
      * qualify through the one-year limb while their bundle purchase is recent and drop
      * out afterwards. That is the intended reading of "active": we do not have a
      * separate licence record to consult for them.
      */
     private static function has_active_licence( $context ) {
-        $row = $context->matching_product;
-        if ( ! $row ) {
+        $rows = self::matching_licence_rows( $context );
+        if ( empty( $rows ) ) {
             // per_user mode, or an ownership row we could not resolve. Nothing to
             // judge them on, so do not silently drop them.
             return true;
         }
 
+        foreach ( $rows as $row ) {
+            if ( self::row_has_active_licence( $row ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Does one ownership row represent a current licence? */
+    private static function row_has_active_licence( $row ) {
         // 1. Bought or renewed within the last year.
         if ( null !== $row->days_since_last && $row->days_since_last <= self::ACTIVE_LICENCE_DAYS ) {
             return true;
@@ -890,15 +905,21 @@ class SSP_Changelog_Emails {
     }
 
     /**
-     * Unix timestamp at which the licence expired, or 0 when it cannot be known.
-     * Called only after has_active_licence() has ruled out current/lifetime rows.
+     * Most recent Unix timestamp at which any matching ownership expired, or 0 when
+     * none can be known. Called only after has_active_licence() has ruled out every
+     * current/lifetime row. The most recent expiry determines the band, so an older
+     * bundle row cannot make a more recently expired direct licence look older.
      */
     private static function licence_expired_at( $context ) {
-        $row = $context->matching_product;
-        if ( ! $row ) {
-            return 0;
+        $latest = 0;
+        foreach ( self::matching_licence_rows( $context ) as $row ) {
+            $latest = max( $latest, self::row_expired_at( $row ) );
         }
+        return $latest;
+    }
 
+    /** Unix expiry timestamp for one ownership row, or 0 when unknown. */
+    private static function row_expired_at( $row ) {
         $meta = ( isset( $row->meta ) && is_array( $row->meta ) ) ? $row->meta : array();
         if ( ! empty( $meta['renewal_date'] ) ) {
             $renewal = strtotime( $meta['renewal_date'] . ' 23:59:59 UTC' );
@@ -919,6 +940,17 @@ class SSP_Changelog_Emails {
         }
 
         return 0;
+    }
+
+    /**
+     * Every ownership row for the product in context. Older engines and direct unit
+     * calls may expose only matching_product, so retain it as the one-row fallback.
+     */
+    private static function matching_licence_rows( $context ) {
+        if ( isset( $context->matching_products ) && is_array( $context->matching_products ) && ! empty( $context->matching_products ) ) {
+            return $context->matching_products;
+        }
+        return ! empty( $context->matching_product ) ? array( $context->matching_product ) : array();
     }
 
     /* --------------------------------------------------------------------- */
