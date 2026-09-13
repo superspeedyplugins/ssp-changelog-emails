@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${CHANGELOG_SITE:-} == /var/www/sites/ssp-changelog-emails/tests-feature-regressions ]] || exit 2
+[[ $(realpath /usr/local/bin/wp) != $(realpath "$0") ]] || exit 2
+exec /usr/local/bin/wp "$@" --path="$CHANGELOG_SITE"

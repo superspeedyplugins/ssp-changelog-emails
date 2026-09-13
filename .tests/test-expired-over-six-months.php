@@ -1,4 +1,5 @@
 <?php
+require __DIR__."/fleet/bootstrap.php";
 /**
  * Integration coverage for the combined expired-over-six-months audience.
  *

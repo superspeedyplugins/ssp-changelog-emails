@@ -1,4 +1,5 @@
 <?php
+require __DIR__."/fleet/bootstrap.php";
 /**
  * Integration coverage for independent changelog baselines per support email.
  *
@@ -34,6 +35,7 @@ class SSP_Changelog_Baseline_Test_Context {
     }
 }
 
+add_filter('sse_support_assets_dir',fn()=>__DIR__.'/fixtures/assets',1000);
 $slug    = 'changelog-baseline-fixture';
 $product = get_page_by_path( $slug, OBJECT, 'product' );
 $product_id = $product ? (int) $product->ID : 0;
