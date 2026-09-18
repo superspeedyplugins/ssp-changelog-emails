@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Super Speedy Plugins — Changelog Emails
  * Description: Sends product-update (changelog) emails to plugin owners via Super Speedy Emails. A worked reference implementation of a support-email TYPE — read each plugin's readme.txt and email owners when a new version ships. The product→slug map derives itself from what ships plus auth-server's license-config.json; adapt the readme location to your own setup. Requires Super Speedy Emails 1.11.0+.
- * Version:     1.6.6
+ * Version:     1.6.7
  * Author:      Super Speedy Plugins
  * Author URI:  https://www.superspeedyplugins.com
  * License:     GPL-3.0-or-later
@@ -816,18 +816,40 @@ class SSP_Changelog_Emails {
         // Older engines have no settings on the context: treat that as "all owners",
         // which is exactly what this plugin did before the option existed.
         $scope = method_exists( $context, 'setting' ) ? $context->setting( 'audience_scope', 'all' ) : 'all';
+        $eligible = true;
         if ( 'active_licence' === $scope ) {
-            return self::has_active_licence( $context );
-        }
-
-        if ( in_array( $scope, array( 'expired_within_6_months', 'expired_over_6_months', 'expired_6_to_12_months', 'expired_over_12_months' ), true ) ) {
-            return self::is_in_expiry_band( $context, $scope );
+            $eligible = self::has_active_licence( $context );
+        } elseif ( in_array( $scope, array( 'expired_within_6_months', 'expired_over_6_months', 'expired_6_to_12_months', 'expired_over_12_months' ), true ) ) {
+            $eligible = self::is_in_expiry_band( $context, $scope );
         }
 
         // `all`, an older engine with no settings, or a stored value from a field
         // declaration this version does not know. The registry sanitises new saves
         // to `all`; retaining the old permissive fallback keeps deploy order safe.
-        return true;
+        if ( ! defined( 'SSE_VERSION' ) || version_compare( SSE_VERSION, '1.23.1', '<' ) ) {
+            return $eligible;
+        }
+
+        return array(
+            'send'  => $eligible,
+            'label' => self::licence_audience_label( $context ),
+        );
+    }
+
+    /** Calculated licence audience shown beside the product's owner count. */
+    private static function licence_audience_label( $context ) {
+        if ( self::has_active_licence( $context ) ) {
+            return 'LICENSED';
+        }
+
+        $expired_at = self::licence_expired_at( $context );
+        if ( ! $expired_at ) {
+            return 'UNKNOWN';
+        }
+
+        $expired_on          = gmdate( 'Y-m-d', $expired_at );
+        $six_months_ago_date = gmdate( 'Y-m-d', strtotime( '-6 months', time() ) );
+        return $expired_on > $six_months_ago_date ? 'EXPIRED' : 'WINBACK';
     }
 
     /**

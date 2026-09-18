@@ -45,6 +45,10 @@ function ssp_changelog_test_owner_row( $renewal_date, $days_since_last = 500, $l
     );
 }
 
+function ssp_changelog_test_send( $decision ) {
+    return is_array( $decision ) ? $decision['send'] : $decision;
+}
+
 $cases = array(
     'five months ago is excluded'     => array( '-5 months', false, 500, 'yearly' ),
     'six months ago is included'      => array( '-6 months', true,  500, 'yearly' ),
@@ -63,7 +67,7 @@ foreach ( $cases as $label => $case ) {
             $license_tier
         ),
     ) );
-    $actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+    $actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
     if ( $expected !== $actual ) {
         fwrite( STDERR, sprintf( "FAIL: %s. Expected %s, got %s.\n", $label, var_export( $expected, true ), var_export( $actual, true ) ) );
         exit( 1 );
@@ -79,7 +83,7 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $exact_boundary ),
     'expired_within_6_months'
 );
-if ( false !== SSP_Changelog_Emails::should_send_to_user( true, $context ) ) {
+if ( false !== ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) ) ) {
     fwrite( STDERR, "FAIL: exact six-month boundary overlapped the within-six and six-plus audiences.\n" );
     exit( 1 );
 }
@@ -91,7 +95,7 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $undated ),
     'expired_over_6_months'
 );
-$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+$actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
 if ( false !== $actual ) {
     fwrite( STDERR, "FAIL: undated ownership was inferred expired from its purchase age.\n" );
     exit( 1 );
@@ -116,7 +120,7 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $old_bundle, $active_direct ),
     'expired_over_6_months'
 );
-$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+$actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
 if ( false !== $actual ) {
     fwrite( STDERR, "FAIL: active direct owner was included in expired-over-six audience because the older bundle row was selected first.\n" );
     exit( 1 );
@@ -126,7 +130,7 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $old_bundle, $active_direct ),
     'active_licence'
 );
-$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+$actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
 if ( true !== $actual ) {
     fwrite( STDERR, "FAIL: active direct owner was excluded from the active audience because the older bundle row was selected first.\n" );
     exit( 1 );
@@ -144,7 +148,7 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $old_bundle, $recent_direct ),
     'expired_over_6_months'
 );
-$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+$actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
 if ( false !== $actual ) {
     fwrite( STDERR, "FAIL: recently expired direct owner was included in expired-over-six audience because the older bundle row was selected first.\n" );
     exit( 1 );
@@ -154,10 +158,28 @@ $context = new SSP_Changelog_Expiry_Test_Context(
     array( $old_bundle, $recent_direct ),
     'expired_within_6_months'
 );
-$actual = SSP_Changelog_Emails::should_send_to_user( true, $context );
+$actual = ssp_changelog_test_send( SSP_Changelog_Emails::should_send_to_user( true, $context ) );
 if ( true !== $actual ) {
     fwrite( STDERR, "FAIL: most recent expiry did not qualify for the within-six-months audience.\n" );
     exit( 1 );
+}
+
+$label_cases = array(
+    'licensed owner' => array( $active_direct, 'active_licence', true, 'LICENSED' ),
+    'recently expired owner' => array( $recent_direct, 'active_licence', false, 'EXPIRED' ),
+    'older expired owner' => array( $old_bundle, 'active_licence', false, 'WINBACK' ),
+    'undated owner' => array( $undated, 'active_licence', false, 'UNKNOWN' ),
+);
+foreach ( $label_cases as $label => $case ) {
+    list( $row, $scope, $expected_send, $expected_label ) = $case;
+    $decision = SSP_Changelog_Emails::should_send_to_user(
+        true,
+        new SSP_Changelog_Expiry_Test_Context( array( $row ), $scope )
+    );
+    if ( ! is_array( $decision ) || $expected_send !== $decision['send'] || $expected_label !== $decision['label'] ) {
+        fwrite( STDERR, sprintf( "FAIL: %s did not return send=%s, label=%s. Got %s.\n", $label, var_export( $expected_send, true ), $expected_label, var_export( $decision, true ) ) );
+        exit( 1 );
+    }
 }
 
 echo "PASS: expired licence audience boundaries and duplicate ownership precedence\n";

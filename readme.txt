@@ -32,6 +32,8 @@ Then, in Super Speedy Emails → Support Emails, click Add Support Email, tick t
 
 When a customer owns the same product directly and through a bundle, any active ownership keeps them in the active audience. If every ownership has expired, the most recent expiry determines their age band.
 
+On Super Speedy Emails 1.23.1 or later, Preview also shows every owner's calculated licence group: LICENSED, EXPIRED within six months, WINBACK after six months, or UNKNOWN when no usable renewal date is stored.
+
 **Placeholders this plugin fills in the body:**
 
 * `{changelog}` — the latest releases since the version you last emailed about, each as a dated heading that deep-links to its own entry on the changelog page, with the rest behind an "and N more changes" link. HTML when your body is HTML, plain text otherwise. Always replaced, even when there are no new entries, so a literal `{changelog}` never ships.
@@ -42,6 +44,9 @@ When a customer owns the same product directly and through a bundle, any active 
 These sit alongside the core engine's own tokens (`{first_name}`, `{product_name}`, `{unsubscribe_url}`, `{manage_url}`, `{site_name}`, `{site_url}`), which the engine fills per-recipient *after* this plugin runs. Both single-brace (`{changelog}`) and double-brace (`{{changelog}}`) forms are accepted. Any token neither this plugin nor the core recognises is left untouched.
 
 == Changelog ==
+
+= 1.6.7 (18th September 2026) =
+* Changelog Support Email previews now divide owners into LICENSED, EXPIRED, WINBACK and UNKNOWN using their current licence and renewal dates.
 
 = 1.6.2 (18th August 2026) =
 * Three new "Send to" audiences on each changelog Support Email: licences expired within the last 6 months, expired 6 to 12 months ago, and expired more than 12 months ago. The bands never overlap, so separate records can cover the whole expired base without anyone receiving two emails.
