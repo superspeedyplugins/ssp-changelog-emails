@@ -1,6 +1,6 @@
 <?php
 if (
-    ABSPATH !== "/var/www/sites/ssp-changelog-emails/tests-feature-regressions/"
+    realpath(ABSPATH) !== realpath("/var/www/sites/ssp-changelog-emails/tests-feature-regressions/")
 ) {
     return;
 }

@@ -3,6 +3,9 @@ set -euo pipefail
 export CHANGELOG_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 source "${SUPERSPEEDY_WORKSPACE:-$HOME/dev/super-speedy}/tools/parallel-dev/bin/lib.sh"
 expected=$(pd_site_dir ssp-changelog-emails tests-feature-regressions)
+# pd_site_dir returns the resolved sites root (/mnt/wsl/sites on WSL since 28 October 2026); keep the
+# /var/www/sites spelling so wp --path, the shim and the fixtures all see one path.
+expected="${expected/#\/mnt\/wsl\/sites\//\/var\/www\/sites\/}"
 [[ -z ${CHANGELOG_SITE:-} || "$CHANGELOG_SITE" == "$expected" ]] || pd_die 'Wrong Changelog fixture path'
 expected_url=$(pd_site_url ssp-changelog-emails tests-feature-regressions)
 [[ -z ${CHANGELOG_URL:-} || "$CHANGELOG_URL" == "$expected_url" ]] || pd_die 'Wrong Changelog fixture URL'

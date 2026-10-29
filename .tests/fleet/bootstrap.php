@@ -3,8 +3,8 @@ if (!defined("WP_CLI") || !WP_CLI) {
     throw new Exception("Changelog regression entry requires WP-CLI");
 }
 if (
-    ABSPATH !==
-        "/var/www/sites/ssp-changelog-emails/tests-feature-regressions/" ||
+    realpath(ABSPATH) !==
+        realpath("/var/www/sites/ssp-changelog-emails/tests-feature-regressions/") ||
     realpath(WP_PLUGIN_DIR . "/ssp-changelog-emails") !==
         realpath(__DIR__ . "/../..")
 ) {
